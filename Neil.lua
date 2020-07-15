@@ -2,30 +2,35 @@
 local _Neil = {}
 _Neil.Neil = "Neil"
 
+-- debug
+local debugchat = true
+local function Chat(...) 
+	if debutchat then return end
+	for _,d in ipairs { ... } do print("DEBUG>",d) end
+end
+
 -- Constant/ReadOnly
-local ReadOnlyWrite = {
-   ['LUA'] = { Type='table', Value=_G, Constant=true }
-}
+local ReadOnlyWrite = {}
 
 -- Check Type
 local CTCase
 local function ConvType(v,wanttype,key)  
+  local kk = ""
+  if key then
+     kk = " for "..key
+  end
   CTCase = CTCase or {
-      local kk = ""
-      if key then
-         kk = " for "..key
-      end
-      byte = function(v)
-         
-         _Neil.Assert(type(v)=="number","Number required"..kk)
-         v = math.floor(v+.5)
-         if v<0 then
-            return 255-(math.abs(v)%255)
-         else
-            return v%255
+      byte = function(v)        
+           _Neil.Assert(type(v)=="number","Number required"..kk)
+           v = math.floor(v+.5)
+           if v<0 then
+             return 255-(math.abs(v)%255)
+           else
+             return v%255
+           end
          end,
        int = function(v)
-         _Neil.Assert(type(v)=="number","Number required"..kk)         
+         _Neil.Assert(type(v)=="number","Number required"..kk)
          return math.floor(v+.5)
        end,
        ['number'] = function(v)
@@ -35,13 +40,16 @@ local function ConvType(v,wanttype,key)
        ['bool'] = function(v)
          _Neil.Assert(type(v)=="boolean","Boolean required"..kk)
          return v
-       ['boolean'] = function(v) return CTCase[wanttype].bool(v) end
+        end,
+       ['boolean'] = function(v) return CTCase[wanttype].bool(v) end,
        ['table'] = function(v)
           _Neil.Assert(type(v)=="table","Table required"..kk)
           return v
+         end,
        ['userdata'] = function(v)
           _Neil.Assert(type(v)=="userdata","UserData required"..kk)
           return v
+         end,
        ['delegate'] = function(v)
           _Neil.Assert(type(v)=="function","Delegate required"..kk)
           return v
@@ -60,35 +68,66 @@ local function ConvType(v,wanttype,key)
        var = function(v) return v end
   }
   -- TODO: Class-checktype
+  if not CTCase[wanttype] then
+	-- TODO: Class check
+	print("WARNING! type "..wanttype.." cannot yet be fully processed yet!")
+	return tostring(v)
+  end
   
   return CTCase[wanttype](v)
 end
 
+
+
+-- Error
+function _Neil.Error(a)
+    error(ConvType(a,"string"))
+end
+
+function _Neil.Assert(condition,err)
+	if not condition then _Neil.Error(err) end
+end
+
+
 -- Globals
-local Globals = {}
+local Globals
+Globals = {
+	['LUA'] = { Type='table', Value=_G, Constant=true },
+	['GLOBALDUMP'] = { Type='delegate', Constant=true, Value=function() local ret="" for k,v in pairs(Globals) do ret = ret .. k .. " = "..tostring(v) end end },
+	['SOUT'] = {Type='delegate', Constant=true,Value=function(...) 
+			local ret = ""
+			for _,v in ipairs{...} do ret = ret .. Globals.TOSTRING.Value(v) end
+			return ret
+		end},
+	['COUT'] = {Type='delegate', Constant=true,Value=function(...) io.write(Globals.SOUT.Value(...)) end },
+	['TOSTRING'] = {Type='delegate', Constant=true,Value=function(v) return ConvType(v,"string") end }
+	
+}
 _Neil.Globals = setmetatable({},{
      __index = function(s,k)
           local uk = k:upper()
-          _Neil.Assert(Globals[uk],"Unknown global identifier \"..k..\"!")
+          -- Chat(uk,tostring(Globals[uk]))
+          _Neil.Assert(Globals[uk],"Reading unknown global identifier \""..k.."\"!")
+          -- print(uk) for k,v in pairs(Globals[uk]) do print(k,v) end -- debug line --
           return Globals[uk].Value
         end,
      __newindex = function(s,k,v)
           local uk = k:upper()
           local want = Globals[uk]
-          _Neil.Assert(want,"Unknown global identifier \"..k..\"!")          
+          _Neil.Assert(want,"Defining unknown global identifier \""..k.."\"!")          
           _Neil.Assert(not want.Constant,k.." is a constant and cannot be overwritten")
           _Neil.Assert((not want.ReadOnly) or (ReadOnlyWrite.Globals),k.." is read-only and cannot be overwritten")
           Globals[uk].Value = ConvType(v,Globals[uk].Type,k)
         end,
-      __call(s,newk,oftype,rw,defaultvalue)
+      __call=function(s,newk,oftype,rw,defaultvalue)
           local uk = newk:upper()
           _Neil.Assert(not Globals[uk],"Duplicate global identifier "..newk)
           local newdec = {}
-          if oftype=="string"
+          if oftype=="string" then
               defaultvalue = defaultvalue or ""
-          elseif oftype=="number" or oftype=="byte" or oftype=="int"
-              defaultvalue = defaultvalue or 0
-          elseif oftype=="boolean" or oftype=="bool"
+          elseif oftype=="number" or oftype=="byte" or oftype=="int" then
+              defaultvalue = defaultvalue or 0 
+          elseif oftype=="boolean" or oftype=="bool" then
               oftype="bool"
               if defaultvalue==nil then defaultvalue=false end
           end
@@ -99,6 +138,7 @@ _Neil.Globals = setmetatable({},{
           Globals[uk] = newdec
         end
 })
+
 
 
 
