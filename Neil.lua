@@ -100,7 +100,9 @@ Globals = {
 			return ret
 		end},
 	['COUT'] = {Type='delegate', Constant=true,Value=function(...) io.write(Globals.SOUT.Value(...)) end },
-	['TOSTRING'] = {Type='delegate', Constant=true,Value=function(v) return ConvType(v,"string") end }
+	['TOSTRING'] = {Type='delegate', Constant=true,Value=function(v) return ConvType(v,"string") end },
+	["REPLACE"] = {Type='delegate', Constant=true,Value=string.gsub },
+	['TRIM'] = {Type='delegate', Constant=true,Value=function(str) return (Neil.Globals.ToString(s):gsub("^%s*(.-)%s*$", "%1")) end }
 	
 }
 _Neil.Globals = setmetatable({},{
@@ -139,7 +141,85 @@ _Neil.Globals = setmetatable({},{
         end
 })
 
+-- Scopes
+local Scopes = { [0] = {ID="NOTHINGNESS"} }
+local Locals = { NOTHINGNESS = {} }
 
+-- Incrementors
+function _Neil.Inc(value) -- Using "++" will lead to translate to this function
+	if type(value)=="number" then
+		return value + 1
+	elseif type(value)=="table" and value[".neilclass"] and value[".contains"]("_Inc") then
+		return value._Inc()
+	else
+		error("Incrementor not usable on "..type(value))
+	end
+end
+
+function _Neil.Dec(value) -- Using "--" will lead to translate to this function
+	if type(value)=="number" then
+		return value + 1
+	elseif type(value)=="table" and value[".neilclass"] and value[".contains"]("_Inc") then
+		return value._Inc()
+	else
+		error("Decrementor not usable on "..type(value))
+	end
+end
+
+function _Neil.Add(value,modvalue) -- Using "+=" will translate to this function
+	if type(value)=="number" then
+		return value + modvalue
+	elseif type(value)=="string" then
+		return value .. Neil.Globals.ToString(modvalue)
+	elseif type(value)=="table" and value[".neilclass"] then
+		Neil.Assert(value[".contains"]("_Add"),"Class "..value[".neilclass"].." has no _Add() method")
+		return value._Add(modvalue)
+	elseif type(value)=="table" then
+		value[#value+1] = modvalue
+		return value
+	else
+		error("Adder not usable on "..type(value))
+	end
+end
+
+function _Neil.Subtract(value,modvalue) -- Using "-=" will translate to this function
+	if type(value)=="number" then
+		return value - modvalue
+	elseif type(value)=="string" then
+		return value:gsub(modvalue,"")
+	elseif type(value)=="table" and value[".neilclass"] then
+		Neil.Assert(value[".contains"]("_Subtract"),"Class "..value[".neilclass"].." has no _Subtract() method")
+		return value._Subtract(modvalue)
+	elseif type(value)=="table" then
+		local temp = {}
+		local array = true
+		-- temp stuff and see if this is an array
+		for k,v in pairs(value) do
+			array = array and (not(type(k)~="number" or (k<=#value and k<1 and k~=math.floor(k))))
+			temp[k]=v
+		end
+		-- Deletion
+		for k,_ in pairs(temp) do value[k]=nil end
+		if array then
+			local i = 1
+			for k,v in ipairs(temp) do
+				if v~=modvalue then
+					value[i]=v
+					i = i + 1
+				end
+			end
+		else
+			for k,v in pairs(temp) do
+				if v~=modvalue then
+					value[k]=v
+				end
+			end
+		end
+		return value
+	else
+		error("Subtractor not usable on "..type(value))
+	end
+end
 
 
 -- Closure
