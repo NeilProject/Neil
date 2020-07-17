@@ -20,7 +20,11 @@
 -- Creation of library
 local _Neil = {}
 _Neil.Neil = "Neil"
-_Neil.UseTable = { lua = function(s) return s end }
+_Neil.UseFileTable = { lua = function(s,chunk) return (loadstring or load)(s,chunk) end }
+_Neil.UseDirectoryTable = { }
+_Neil.FileSystemCaseSensitive = false -- Must be set to true if directly reading from a Linux system or an other case senstive underground
+
+local UsedByNeil = {}
 
 -- debug
 local debugchat = true
@@ -105,7 +109,8 @@ function _Neil.Error(a)
 end
 
 function _Neil.Assert(condition,err)
-	if not condition then _Neil.Error(err) end
+	err = err or "Neil Assertion Failed"
+	if not condition then _Neil.Error(err) return false,err else return condition end
 end
 
 
@@ -123,7 +128,33 @@ Globals = {
 	['TOSTRING'] = {Type='delegate', Constant=true,Value=function(v) return ConvType(v,"string") end },
 	["REPLACE"] = {Type='delegate', Constant=true,Value=string.gsub },
 	['TRIM'] = {Type='delegate', Constant=true,Value=function(str) return (Neil.Globals.ToString(s):gsub("^%s*(.-)%s*$", "%1")) end }
-	
+	['LEFT'] = {Type='delegate', Constant=true, Value=function(s, l) 
+			if not _Neil.Assert(type(s)=="string","String exected as first argument for 'left'") then return end
+			l = l or 1
+			_Neil.Assert(type(l)=="number","Number expected for second argument in 'left'")
+			return substr(s,1,l)
+		end},
+	['RIGHT'] = {Type=delegate, Constant=true, Value=function(s,l)
+			local ln
+			local st
+			ln = l or 1
+			st = s or "nostring"
+			return substr(st,-ln,-1)
+		end},
+	['EXTRACTEXT'] = {Type='delegate' Constant=true,Value=function(str,tolower)
+		local ret = ""
+		local l=0
+		local right = _Neil.Globals.Right
+		local left = _Neil.Globals.Left
+		repeat
+			l = l + 1
+			if l>=#str then return "" end
+			ret = right(str,l)
+			if left(ret,1)=="/" or left(ret,1)=="\\" then return "" end
+		until left(ret,1)=="."
+		if tolower then ret = ret:lower() end
+		return right(ret,#ret-1)
+	end},
 }
 _Neil.Globals = setmetatable({},{
      __index = function(s,k)
@@ -266,9 +297,15 @@ function fileExists(name)
    if f~=nil then io.close(f) return true else return false end
 end
 
+function dirExists(name)
+	-- return nil,"No API has been set up to check the existence of directories!"
+	return false
+end
+
 _Neil.ReadFile   = readAll
 _Neil.ReadDir    = readDir
 _Neil.FileExists = fileExists
+_Neil.DirExists  = dirExists
 
 
 -- Chop codeup
@@ -290,12 +327,59 @@ function _Neil.Load(script,chunk)
 end
 
 function _Neil.Use(module,chunk)
-	local script,err
+	local key,err
+	local used
+	if _Neil.FileSystemCaseSensitive then
+		key = module
+	else
+		key = module:lower()
+	end
+	if UsedByNeil[key] then
+		return UsedByNeil[key]
+	end
 	_Neil.ReadFile   = _Neil.ReadFile   or readAll
 	_Neil.ReadDir    = _Neil.ReadDir    or readDir
 	_Neil.FileExists = _Neil.FileExists or fileExists
-	
+	_Neil.DirExists  = _Neil.DirExists  or dirExists
+	if     _Neil.FileExists(module..".neil") then used,err =  _Neil.UseFile(module..".neil",chunk) 
+	elseif _Neil.DirExists(module..".neilbudle") then used,err = _Neil.UseBundle(module..".neilbundle",chunk) end
+	else
+		for k,v in pairs(_Neil.UseFileTable) do
+			if _Neil.FileExists(module.."."..k) then used,err = _Neil.Assert(v(module.."."..k,ch)) end
+		end
+		if not used then
+			for k,v in pairs(_Neil.UseDirTable) do
+				if _Neil.DirExists(module.."."..k) then used,err =  _Neil.Assert(v(module.."."..k,ch)) end
+			end
+		end
+	end
+	if not _Neil.Assert(used,"Use failure\n"..err) then return nil,err end
+	UsedByNeil[k] = used
+	return used
 end
+
+
+-- Warning! Best is to NEVER call this function directly unless you know what you are doing!
+function _Neil.UseFile(file,chunk)
+	local s,e = _Neil.ReadFile(file)
+	if not s then return nil,e end
+	return _Neil.Translate(file,chunk)
+end
+
+-- Warning! Best is to NEVER call this function directly unless you know what you are doing!
+function _Neil.UseDir(dir,chunk)
+	local d = _Neil.ReadDir(dir)
+	local s = ""
+	if _Neil.FileExists(dir.."/_neilbundle.neil") then return _Neil.Use(dir.."/_neilbundle") end
+	for _,f in d do
+		if _Neil.Globals.Right(f,5)==".neil" then
+			s = s .. "#use \"".._Neil.Globals.Left(f,#f-5).."\"\n"
+		end
+	end
+	return _Neil.Load(s,"NEILBUNDLE: "..dir)
+end
+
+
 	
 -- Closure
 return _Neil
