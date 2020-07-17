@@ -245,10 +245,10 @@ end
 -- Load files
 local function readAll(file) 
 	-- This is when no alternate routine has been set for this
-    local f = assert(io.open(file, "rb"))
+    local f,e = io.open(file, "rb"); _Neil.Assert(f,e); if not f then return nil,"Reading failed!" end
     local content = f:read("*all")
     f:close()
-    return content
+    return content,e
 end
 
 local function readDir(dir) 
@@ -258,13 +258,44 @@ local function readDir(dir)
 	-- bound to any engine or OS, you will have to set this yourself.
 	-- The function will have to return an array based table in which
 	-- all files within a directory are returned... Recursively.
-	error("No API has been set up to read entire directories!")
+	return nil,"No API has been set up to read entire directories!"
 end
 
-_Neil.ReadFile = readAll
-_Neil.ReadDir  = readDir
+function fileExists(name)
+   local f=io.open(name,"r")
+   if f~=nil then io.close(f) return true else return false end
+end
+
+_Neil.ReadFile   = readAll
+_Neil.ReadDir    = readDir
+_Neil.FileExists = fileExists
 
 
+-- Chop codeup
 
+-- Translate
+function _Neil.Translate(script,chunk)
+	return nil,"Sorry translate does not yet work!"
+end
+
+
+-- Load
+function _Neil.Load(script,chunk)
+	local success,translation = _Neil.Translate(script,chunk)
+	_Neil.Assert(succes,"Translation error:\n"..translation)
+	if not success then return end -- Safety precaution!
+	local ret,err = (loadstring or load)(script,chunk)
+	_Neil.Assert(ret,err)
+	return ret
+end
+
+function _Neil.Use(module,chunk)
+	local script,err
+	_Neil.ReadFile   = _Neil.ReadFile   or readAll
+	_Neil.ReadDir    = _Neil.ReadDir    or readDir
+	_Neil.FileExists = _Neil.FileExists or fileExists
+	
+end
+	
 -- Closure
 return _Neil
