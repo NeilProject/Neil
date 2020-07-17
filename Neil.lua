@@ -20,6 +20,7 @@
 -- Creation of library
 local _Neil = {}
 _Neil.Neil = "Neil"
+_Neil.UseTable = { lua = function(s) return s end }
 
 -- debug
 local debugchat = true
@@ -162,7 +163,8 @@ _Neil.Globals = setmetatable({},{
 
 -- Scopes
 local Scopes = { [0] = {ID="NOTHINGNESS"} }
-local Locals = { NOTHINGNESS = {} }
+local TrueLocals = { NOTHINGNESS = {} }
+local Locals = { NOTHINGNESS=TrueLocals.NOTHINGNESS }
 
 -- Incrementors
 function _Neil.Inc(value) -- Using "++" will lead to translate to this function
@@ -239,6 +241,29 @@ function _Neil.Subtract(value,modvalue) -- Using "-=" will translate to this fun
 		error("Subtractor not usable on "..type(value))
 	end
 end
+
+-- Load files
+local function readAll(file) 
+	-- This is when no alternate routine has been set for this
+    local f = assert(io.open(file, "rb"))
+    local content = f:read("*all")
+    f:close()
+    return content
+end
+
+local function readDir(dir) 
+	-- This is when no alternate routine has been set for this
+	-- However Lua does NOT support dir read-outs, but always needs 
+	-- an additional API for this! As Neil has been set up not to be 
+	-- bound to any engine or OS, you will have to set this yourself.
+	-- The function will have to return an array based table in which
+	-- all files within a directory are returned... Recursively.
+	error("No API has been set up to read entire directories!")
+end
+
+_Neil.ReadFile = readAll
+_Neil.ReadDir  = readDir
+
 
 
 -- Closure
