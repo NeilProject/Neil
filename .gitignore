@@ -39,5 +39,10 @@ luac.out
 *.x86_64
 *.hex
 
+# MKL crap
 *.MKL.*
 MKL*
+
+
+# Test should remain invisible.
+Test
