@@ -1,7 +1,7 @@
 -- <License Block>
 -- Neil.lua
 -- Neil
--- version: 20.07.16
+-- version: 20.07.31
 -- Copyright (C) 2020 Jeroen P. Broks
 -- This software is provided 'as-is', without any express or implied
 -- warranty.  In no event will the authors be held liable for any damages
@@ -23,6 +23,27 @@ _Neil.Neil = "Neil"
 _Neil.UseFileTable = { lua = function(s,chunk) return (loadstring or load)(s,chunk) end }
 _Neil.UseDirectoryTable = { }
 _Neil.FileSystemCaseSensitive = false -- Must be set to true if directly reading from a Linux system or an other case senstive underground
+
+
+-- keywords and operators
+local operators = {"++","--","!=" --[[Neil will replace != with ~=]],"~=","::=","+=","-=","==","<=",">=","//","||","&&" --[[ Maybe // is a bit odd to call an operator, but for Neil that's the easier way to work]], "/*", "*/",
+                    "+", "-", "=", ">",  "<", "!" --[[Neil will replace ! with 'not']] , "%","#","*","/","^",",","/"}
+local keywords = { "void","int","byte","number","bool","boolean","delegate","function","plua", "userdata", -- types
+                   "switch","case","default", "fallthrough", -- casing
+				   "repeat","until","forever","loopwhile", -- basic looping
+				   "do","end", -- Basic scope 
+				   "if","then","else","elseif", -- if
+				   "while", -- while
+				   "for", -- for
+				   "cfor", -- reserved. Idea for c-syntax for like this "for (i=1;i<=10;i++)".  But not planned for short term
+				   "global","public","private","final","abstract", "get", "set", -- needed for declarations
+				   "class","module","group","quickmeta",
+				   "mod", -- Neil will replace that with % -- Just a nice thing for BASIC and Pascal coders
+				   "return", -- We need that one, don't we?
+				   "true", "false", -- The two boolean values
+				   "nil", "null", -- "null" will be replaced by "nil"
+
+}
 
 local UsedByNeil = {}
 
@@ -113,12 +134,18 @@ function _Neil.Assert(condition,err)
 	if not condition then _Neil.Error(err) return false,err else return condition end
 end
 
-
 -- Globals
+local substr = string.sub
 local Globals
 Globals = {
 	['LUA'] = { Type='table', Value=_G, Constant=true },
 	['GLOBALDUMP'] = { Type='delegate', Constant=true, Value=function() local ret="" for k,v in pairs(Globals) do ret = ret .. k .. " = "..tostring(v) end end },
+	['GLOBALEXISTS'] = {Type='delegate', Constant=true, value=function(n) 
+		_Neil.Assert(type(n)=="string","Global exists expects a string. Not a "..type(n))
+		n = n:upper()
+		local g = Globals[n]
+		return g~=nil and g~=false
+	end},
 	['SOUT'] = {Type='delegate', Constant=true,Value=function(...) 
 			local ret = ""
 			for _,v in ipairs{...} do ret = ret .. Globals.TOSTRING.Value(v) end
@@ -127,7 +154,7 @@ Globals = {
 	['COUT'] = {Type='delegate', Constant=true,Value=function(...) io.write(Globals.SOUT.Value(...)) end },
 	['TOSTRING'] = {Type='delegate', Constant=true,Value=function(v) return ConvType(v,"string") end },
 	["REPLACE"] = {Type='delegate', Constant=true,Value=string.gsub },
-	['TRIM'] = {Type='delegate', Constant=true,Value=function(str) return (Neil.Globals.ToString(s):gsub("^%s*(.-)%s*$", "%1")) end }
+	['TRIM'] = {Type='delegate', Constant=true,Value=function(str) return (Neil.Globals.ToString(str):gsub("^%s*(.-)%s*$", "%1")) end },
 	['LEFT'] = {Type='delegate', Constant=true, Value=function(s, l) 
 			if not _Neil.Assert(type(s)=="string","String exected as first argument for 'left'") then return end
 			l = l or 1
@@ -141,7 +168,16 @@ Globals = {
 			st = s or "nostring"
 			return substr(st,-ln,-1)
 		end},
-	['EXTRACTEXT'] = {Type='delegate' Constant=true,Value=function(str,tolower)
+	['MID'] = {Type=delegate, Constant=true, Value=function(s,o,l)
+			local ln
+			local of
+			local st
+			ln=l or 1
+			of=o or 1
+			st=s or ""
+			return substr(st,of,(of+ln)-1)
+		end},
+	['EXTRACTEXT'] = {Type='delegate', Constant=true,Value=function(str,tolower)
 		local ret = ""
 		local l=0
 		local right = _Neil.Globals.Right
@@ -162,6 +198,7 @@ _Neil.Globals = setmetatable({},{
           -- Chat(uk,tostring(Globals[uk]))
           _Neil.Assert(Globals[uk],"Reading unknown global identifier \""..k.."\"!")
           -- print(uk) for k,v in pairs(Globals[uk]) do print(k,v) end -- debug line --
+		  -- print(s,k,uk,Globals[uk],Globals[uk].Value)
           return Globals[uk].Value
         end,
      __newindex = function(s,k,v)
@@ -191,6 +228,60 @@ _Neil.Globals = setmetatable({},{
           Globals[uk] = newdec
         end
 })
+
+
+-- Regular Serialize
+local function SafeString(avalue)
+		local value = avalue
+		for i=1, 255 do
+			if i<32 or i>126 or i==34 then value = value:gsub(string.char(i),("\\03d"):format(i)) end
+		end
+		return value
+end
+
+local function Serialize(name,value,tabs)
+	tabs = tabs or 0
+	_Neil.Assert(type(name)=="string","Parameter #1 for Serialize must be a string and not a "..type(name))
+	local t = type(value)
+	local ret = "--[["..t.."]] "
+	for i=1,tabs do ret = ret .. "\t" end
+	if name~="" then ret = ret .. name .. " = " end
+	if t == "number" or t=="boolean" then
+		ret = ret .. value 
+	elseif t=="string" then
+		ret = ret .. "\""..SafeString(value).."\""
+	elseif t=="userdata" or t=="function" then
+		ret = ret .. "\"Type "..t.." cannot be serialized!\""
+	elseif t=="table" then
+		if t[".neilclass"] then
+			ret = ret .. "\"Class serializing not (yet) supported\""
+		else
+			ret = ret .. "{\n"
+			local comma
+			for k,v in pairs(value) do
+				-- if comma then ret = ret .. "," else comma = true end
+				if not (type(k)=="string" or type(k)=="number" or type(k)=="boolean") then return false,"Serialize error! Invalid table key!" end 
+				key = k
+				if type(k)=="string" then
+					key = '"'..SafeString(k)..'"'
+				end
+				if comma then ret = ret .. ",\n" else comma = true end
+				ret = ret .. Serialize("["..key.."]",v,tabs+1)
+			end			
+			-- for i=1,tabs do ret = ret .. "\t" end 
+			ret = ret .. "}"
+		end
+	else
+		ret = ret .. '"Unknown type: '..type(v)..'"'
+	end
+	return ret
+end
+Globals.SERIALIZE   = {Type='delegate', Value=Serialize,  Constant=true}
+Globals.SAFESTRING  = {Type='delegate', Value=SafeString, Constant=true}
+
+
+
+
 
 -- Scopes
 local Scopes = { [0] = {ID="NOTHINGNESS"} }
@@ -273,6 +364,35 @@ function _Neil.Subtract(value,modvalue) -- Using "-=" will translate to this fun
 	end
 end
 
+-- Classes
+local function ClassIndex(trueobject,self,key)
+end
+
+local function ClassNewIndex(trueobject,self,key,value)
+end
+
+local function ClassStaticIndex(class,key)
+end
+
+local function ClassStaticNewIndex(class,key,value)
+end
+
+local function ClassDestructor(class,key)
+end
+
+function _Neil.ClassNew(nameclass)
+	-- Does this class exist?
+	local ucln = nameclass:upper(); if not _Neil.Assert(Globals[ucln],"No Neil Identifier known as "..nameclass) then return end
+	local clss = Globals[ucln]
+	if not _Neil.Assert(clss.Type=="class","Requested identiefier is not a class: "..nameclass) then return end
+
+	local trueobject = { ['neilclass']=nameclass}
+	local ret = setmetatable({},{__index=function(s,k) return ClassIndex(trueobject,s,k) end, __newindex=function(s,k,v) ClassNewIndex(trueobject,s,k,value) end, __gc=function(s) ClassDestructor(trueobject,s) end })
+	return ret
+end
+
+
+
 -- Load files
 local function readAll(file) 
 	-- This is when no alternate routine has been set for this
@@ -309,9 +429,156 @@ _Neil.DirExists  = dirExists
 
 
 -- Chop codeup
+local function Chop(script,chunk)
+	local allowtalk = true -- debug!
+	local talk = function(...) 
+		for i,l in ipairs {...} do
+			print(("talk%04d:>"):format(i),type(l),l)
+		end
+	end
+	local word = {word="", kind=""}
+	local instruction = {{words = {word}}}
+	local chopped = {instructions=instruction,iused={}}
+	local linenumber = 1
+	local mid = _Neil.Globals.MID
+	local left = _Neil.Globals.LEFT
+	local right = _Neil.Globals.RIGHT
+	local instring = false
+	local incomment = false
+	local multiline = false
+	local escape = false
+	local hexnum = false
+	local newword
+	local function newinstruction() 
+		newword()
+		local ni = {  words = {{word="",kind="" } } } 
+		instruction[#instruction+1] = ni
+		hexnum=false
+	end
+	local function newline()
+		if not multiline then 
+			newinstruction()
+			incomment = false
+		elseif instring then
+			_Neil.Error("Chopping Error: Unfinished string")
+			return nil
+		end
+		linenumber = linenumber + 1
+	end
+	local function cword()
+		return instruction[#instruction].words[#(instruction[#instruction].words)]
+	end
+	function newword()
+		local oldword=cword()
+		-- print("Before trim: ",oldword.word)
+		oldword.word = _Neil.Globals.Trim(oldword.word)
+		-- print("After trim: ",oldword.word)
+		if oldword.kind=="identifier" then
+			local cw = oldword.word:lower()
+			for _,w in ipairs(keywords) do
+				if cw==w then oldword.kind="keyword" break end
+			end			
+		end
+		if oldword.kind=="operator" then
+			if oldword.word == "!"  then oldword.word="not" oldword.kind="keyword" end
+			if oldword.word == "&&" then oldword.word="and" oldword.kind="keyword" end
+			if oldword.word == "||" then oldword.word="or"  oldword.kind="keyword" end
+		elseif oldword.kind=="keyword" then
+			if oldword.word:upper()=="MOD" then oldword.word="%" oldword.kind="operator" end
+		end
+		oldword.uword = oldword.word:upper()
+		oldword.lword = oldword.word:lower()
+		instruction[#instruction].words[#instruction[#instruction].words+1] = {word="",kind=""}
+		hexnum = false
+	end
+	local function cinstruction()
+		return instruction[#instruction]
+	end
+	local function haveoperator(s)
+		for _,o in ipairs(operators) do
+			if o==s then return true end
+		end
+		return false
+	end
+		
+	local char
+	for i=1,#script do
+		instruction[#instruction].linenumber = linenumber
+		local lastchar = char or "-- NOTHING --"
+		char = mid(script,i,1)
+		local uchar = char:upper()
+		local lchar = char:lower()
+		local uasc = uchar:byte()
+		-- talk(i,char,lastchar,instring,incomment)
+		if char=="\n" then
+			newline()
+		elseif instring then
+			if char=="\"" and (not multiline) and (not escape) then
+				instring=false
+				newword()
+			elseif char=="]" and lastchar=="]" and multiline then
+			    instring=false
+				newword()
+			else
+				cword().word=cword().word .. char
+			end
+		elseif incomment then
+			if multiline and char=="/" and lastchar=="*" then incomment=false end
+		elseif char==" " or char=="\t" or char =="\r" then -- Ignore whitespaces... With apologies to the developers of the WhiteSpace programming language who thought these characters are valuable :-P
+			if cword().word~="" then newword() end
+		elseif char=="\"" then
+			instring=true
+			multiline=false
+			if cword().word~="" then newword() end
+			cword().kind="string"
+		elseif (uasc>=65 and uasc<=90) or char=="_" or (((uasc>=48 and uasc<=57) or char==".") and cword().kind=="identifier")   then
+			if cword().kind~="identifier" and cword().word~="" then newword() end
+			cword().word = cword().word .. lchar
+			cword().kind = "identifier"
+        elseif (uasc>=48 and uasc<=57) or (char=="." and cword().kind=="number") or (lchar=="x" and cword().word=="0") or (uasc>=65 and uasc<=70 and hexnum) then
+			if cword().kind~="number" and cword().word~="" then newword() end
+			cword().word = cword().word .. char
+			cword().kind = "number"
+			if lchar=="x" then hexnum=true end
+		elseif char=="!" or char=="%" or char=="#" or char=="^" or char=="*" or char=="(" or char==")" or char=="-" or char=="|" or char=="&" or char=="=" or char=="+" or char=="," or char=="/" then
+			if cword().kind~="operator" and cword().word~="" then newword() end
+			if cword().word~="" then
+				-- print(lastchar,char)
+				if char=="/" and lastchar=="/" then 
+					cword().kind="comment"
+					cword().word="irrellevant"
+					incomment = true
+					multiline = false
+				elseif char=="*" and lastchar=="/" then
+					cword().kind="comment"
+					cword().word="irrellevant (multiline)"
+					incomment = true
+					multiline = true
+				elseif haveoperator(lastchar..char) then				    
+					cword().kind="operator"
+					cword().word=lastchar..char					
+					newword()
+				else					
+					newword()
+					cword().kind="operator"
+					cword().word=char
+				end
+			else
+				cword().kind="operator"
+				cword().word=char
+			end
+		else
+			_Neil.Error("Chopping error: Unknown character "..char.." in line "..linenumber)
+		end
+	end
+	return chopped
+end
+
 
 -- Translate
 function _Neil.Translate(script,chunk)
+	local chopped = Chop(script)
+	print(Serialize("chopped",chopped))
 	return nil,"Sorry translate does not yet work!"
 end
 
@@ -342,7 +609,7 @@ function _Neil.Use(module,chunk)
 	_Neil.FileExists = _Neil.FileExists or fileExists
 	_Neil.DirExists  = _Neil.DirExists  or dirExists
 	if     _Neil.FileExists(module..".neil") then used,err =  _Neil.UseFile(module..".neil",chunk) 
-	elseif _Neil.DirExists(module..".neilbudle") then used,err = _Neil.UseBundle(module..".neilbundle",chunk) end
+	elseif _Neil.DirExists(module..".neilbudle") then used,err = _Neil.UseBundle(module..".neilbundle",chunk) 
 	else
 		for k,v in pairs(_Neil.UseFileTable) do
 			if _Neil.FileExists(module.."."..k) then used,err = _Neil.Assert(v(module.."."..k,ch)) end
