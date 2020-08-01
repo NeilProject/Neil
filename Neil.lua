@@ -1,7 +1,7 @@
 -- <License Block>
 -- Neil.lua
 -- Neil
--- version: 20.07.31
+-- version: 20.08.01
 -- Copyright (C) 2020 Jeroen P. Broks
 -- This software is provided 'as-is', without any express or implied
 -- warranty.  In no event will the authors be held liable for any damages
@@ -569,11 +569,17 @@ local function Chop(script,chunk)
 	local newword
 	local function idins()
 		local clean = {}
+		local haakjes = 0
 		local ins = instruction[#instruction]
 		local prefixed = _Neil.Globals.Prefixed
 		if ins.kind and ins.kind~="" then return end -- No need to waste time on an instruction already identified
 		local definition
 		for _,w in ipairs(ins.words) do
+			if w.word=="(" then 
+				haakjes = haakjes + 1
+			elseif w.word==")" then
+				haakjes = haakjes - 1
+			end
 			if w.word=="++" then
 				if not _Neil.Assert(not definition,"Syntax error in line #"..ins.linenumber) then return end
 				definition = "increment"
@@ -583,7 +589,7 @@ local function Chop(script,chunk)
 			elseif w.kind~="" then 
 				clean[#clean+1] = w 
 			end
-			if w.word=="=" then 
+			if w.word=="=" and haakjes<=0 then 
 				if not _Neil.Assert(not definition,"Syntax error in line #"..ins.linenumber) then return end
 				ins.define = clean
 				clean = {}
