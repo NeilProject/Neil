@@ -191,6 +191,48 @@ Globals = {
 		if tolower then ret = ret:lower() end
 		return right(ret,#ret-1)
 	end},
+	["SPLIT"] = {Type='delegate', Constant=true, Value=function(inputstr,sep)
+        if sep == nil then
+                sep = "%s"
+        end
+        local t = {}
+        local i=1
+        for str in string.gmatch(inputstr, "([^"..sep.."]+)") do
+                t[i] = str
+                i = i + 1
+        end
+        return t
+	end},
+	["PREFIXED"] = {Type='delegate', Constant=true, Value=function(str,prefix)
+		return _Neil.Globals.Left(str,#prefix)==prefix
+	end},
+	["SUFFIXED"] = {Type='delegate', Constant=true, Value=function(str,suffix)
+		return _Neil.Globals.Right(str,#suffix)==suffix
+	end},
+	["SPAIRS"] = {Type='delegate', Constant=true, Value=function(t, order)
+		-- collect the keys
+		local keys = {}
+		local t2  = {}
+		for k,v in pairs(t) do keys[#keys+1] = k  t2[k]=v end
+			-- if order function given, sort by it by passing the table and keys a, b,
+			-- otherwise just sort the keys 
+			if order then
+				function bo(a,b) 
+					return order(t, a, b) 
+				end
+				table.sort(keys, bo)
+			else
+			table.sort(keys)
+		end
+		-- return the iterator function
+		local i = 0
+		return function()
+			i = i + 1
+			if keys[i] then
+				return keys[i], t2[keys[i]]
+			end
+		end
+	end},
 }
 _Neil.Globals = setmetatable({},{
      __index = function(s,k)
@@ -428,6 +470,82 @@ _Neil.FileExists = fileExists
 _Neil.DirExists  = dirExists
 
 
+-- Macro 
+
+function MacroReplace(ori,subk,subw)
+	-- NOTE!
+	-- I am VERY well aware this routine is SLOOOOOOOW!
+	-- I needed a "pure" replacer and not one bound to the rules of REGEX (which the original Lua replacer is) 
+	-- and one that does not automatically substitute things it shouldn't (which Lua does as well).
+	-- Feel free to replace this with an API in C or something to get it to work in your engine faster.
+	-- Also this routine replaces CASE INSENSITVELY. 
+	-- I used this slow routine solely to make sure things work without any additional shit.
+	-- If you wanna revert back to the original routine simply set Neil.MacroReplace to nil 
+	-- and Neil can handle it alright!
+	if #subk>#ori then return ori end -- If too small this doesn't make sense anway
+	subk = subk:upper()
+	local mid = _Neil.Globals.Mid
+	local skip = 0
+	local ret = ""
+	for i=1,#ori do
+		local ch = mid(ori,i,1)
+		local word = mid(ori,i,#subk):upper()
+		if skip>0 then
+			-- print("skip:",skip,ch)
+			skip = skip - 1
+		elseif i<#ori-#subk and word==subk then
+			ret = ret .. subw
+			skip = #subk - 1
+		else
+			ret = ret .. ch
+			-- print("add:",i,ch,string.byte(ch))
+		end
+	end	
+	return ret
+end
+
+_Neil.MacroReplace = MacroReplace
+
+local Macros = {}
+local function Macro(script,chunk)
+	local LocalMacros = {}
+	local lines = _Neil.Globals.Split(script,"\n")
+	local trim = _Neil.Globals.Trim
+	local prefixed = _Neil.Globals.Prefixed
+	local ret = script
+	local rep = _Neil.MacroReplace or MacroReplace
+	for ln,rl in ipairs(lines) do
+		local line = trim(rl)
+		-- print(ln,'"'..rl..'"','"'..line..'"')
+		if prefixed(line:lower(),"#macro") then
+			if not prefixed(line:lower(),"#macro ") then return nil,"Macro syntax error" end
+			local chop = _Neil.Globals.Split(line," ")
+			if #chop<3 then return nil,"Invalid constructed macro.... Not enough stuff defined... or so it seems! ("..(#chop)..")" end
+			if chop[2]=="" or chop[3]=="" then return nil,"Macro could not be properly parsed... Please mind your whitespaces here!" end
+			local work
+			chop[2] = chop[2]:upper()
+			if prefixed(chop[2],"@") then work=LocalMacros else work=Macros end
+			--for k,v in pairs(work) do -- This seems an odd way, but as case insensitive macros may be plannend for the future, I need to make sure nothing can happen here!
+			--	if k:upper()==chop[2]:upper() then return nil,"Duplicate macro '"..chop2[2].."'" end
+			--end
+			if work[chop[2]] then return nil,"Duplicate macro '"..chop2[2].."'" end
+			work[chop[2]] = ""
+			for i,w in ipairs(chop) do
+				if i>=4 then work[chop[2]] = work[chop[2]] .. " " end
+			    if i>=3 then work[chop[2]] = work[chop[2]] .. w end
+			end
+		end
+	end	
+	for _,work in ipairs{ LocalMacros,Macros } do
+		for macro,substitute in _Neil.Globals.sPairs(work) do
+			-- ret = ret:gsub("\\","\\\\")
+			-- ret = ret:gsub(macro,substitute)
+			ret = rep(ret,macro,substitute)
+		end
+	end
+	return ret,"All clear!"
+end
+
 -- Chop codeup
 local function Chop(script,chunk)
 	local allowtalk = true -- debug!
@@ -449,8 +567,52 @@ local function Chop(script,chunk)
 	local escape = false
 	local hexnum = false
 	local newword
+	local function idins()
+		local clean = {}
+		local ins = instruction[#instruction]
+		local prefixed = _Neil.Globals.Prefixed
+		if ins.kind and ins.kind~="" then return end -- No need to waste time on an instruction already identified
+		local definition
+		for _,w in ipairs(ins.words) do
+			if w.word=="++" then
+				if not _Neil.Assert(not definition,"Syntax error in line #"..ins.linenumber) then return end
+				definition = "increment"
+			elseif w.word=="--" then
+				if not _Neil.Assert(not definition,"Syntax error in line #"..ins.linenumber) then return end
+				definition = "decrement"
+			elseif w.kind~="" then 
+				clean[#clean+1] = w 
+			end
+			if w.word=="=" then 
+				if not _Neil.Assert(not definition,"Syntax error in line #"..ins.linenumber) then return end
+				ins.define = clean
+				clean = {}
+				definition = "definition"
+			elseif w.word == "+=" then
+				if not _Neil.Assert(not definition,"Syntax error in line #"..ins.linenumber) then return end
+				ins.define = clean
+				clean = {}
+				definition = "add"
+			elseif w.word == "-=" then
+				if not _Neil.Assert(not definition,"Syntax error in line #"..ins.linenumber) then return end
+				ins.define = clean
+				clean = {}
+				definition = "subtract"
+			end
+		end
+		ins.words = clean
+		if #clean==0 or clean[1].kind=="comment" or (prefixed(clean[1].word,"//")) then
+			definition = "whiteline"
+		elseif clean[1].word=="#" then
+			definition = "preprocessor directive"
+		else
+			definition = definition or "instruction"
+		end
+		ins.kind = definition
+	end
 	local function newinstruction() 
 		newword()
+		idins()
 		local ni = {  words = {{word="",kind="" } } } 
 		instruction[#instruction+1] = ni
 		hexnum=false
@@ -526,6 +688,15 @@ local function Chop(script,chunk)
 			if multiline and char=="/" and lastchar=="*" then incomment=false end
 		elseif char==" " or char=="\t" or char =="\r" then -- Ignore whitespaces... With apologies to the developers of the WhiteSpace programming language who thought these characters are valuable :-P
 			if cword().word~="" then newword() end
+		elseif char==";" then
+			local directive
+			for i,v in ipairs(instruction[#instructions].words) do
+				if v.kind~="" then					
+					directive = v.word=="#"
+					break
+				end
+			end
+			if not directive then newinstruction() end
 		elseif char=="\"" then
 			instring=true
 			multiline=false
@@ -540,7 +711,7 @@ local function Chop(script,chunk)
 			cword().word = cword().word .. char
 			cword().kind = "number"
 			if lchar=="x" then hexnum=true end
-		elseif char=="!" or char=="%" or char=="#" or char=="^" or char=="*" or char=="(" or char==")" or char=="-" or char=="|" or char=="&" or char=="=" or char=="+" or char=="," or char=="/" then
+		elseif char=="!" or char=="%" or char=="#" or char=="^" or char=="*" or char=="(" or char==")" or char=="-" or char=="|" or char=="&" or char=="=" or char=="+" or char=="," or char=="/" or char==">" or char=="<" then
 			if cword().kind~="operator" and cword().word~="" then newword() end
 			if cword().word~="" then
 				-- print(lastchar,char)
@@ -571,13 +742,17 @@ local function Chop(script,chunk)
 			_Neil.Error("Chopping error: Unknown character "..char.." in line "..linenumber)
 		end
 	end
+	idins() -- make sure it's ALL DONE
 	return chopped
 end
 
 
 -- Translate
 function _Neil.Translate(script,chunk)
-	local chopped = Chop(script)
+	-- print("Ori\n",script,"/Ori")
+	local macroed,macroerror = Macro(script,chunk); if not macroed then _Neil.Error("Macro error: "..macroerror) return nil,"Macro error: "..macroerror end
+	-- print(macroed) error("Crash!") -- debug
+	local chopped = Chop(macroed)
 	print(Serialize("chopped",chopped))
 	return nil,"Sorry translate does not yet work!"
 end
