@@ -1,7 +1,7 @@
 -- <License Block>
 -- Neil.lua
 -- Neil
--- version: 20.08.01
+-- version: 20.08.02
 -- Copyright (C) 2020 Jeroen P. Broks
 -- This software is provided 'as-is', without any express or implied
 -- warranty.  In no event will the authors be held liable for any damages
@@ -24,19 +24,20 @@ _Neil.UseFileTable = { lua = function(s,chunk) return (loadstring or load)(s,chu
 _Neil.UseDirectoryTable = { }
 _Neil.FileSystemCaseSensitive = false -- Must be set to true if directly reading from a Linux system or an other case senstive underground
 
+local TranslationCount = 0
 
 -- keywords and operators
 local operators = {"++","--","!=" --[[Neil will replace != with ~=]],"~=","::=","+=","-=","==","<=",">=","//","||","&&" --[[ Maybe // is a bit odd to call an operator, but for Neil that's the easier way to work]], "/*", "*/",
                     "+", "-", "=", ">",  "<", "!" --[[Neil will replace ! with 'not']] , "%","#","*","/","^",",","/"}
 local keywords = { "void","int","byte","number","bool","boolean","delegate","function","plua", "userdata", -- types
-                   "switch","case","default", "fallthrough", -- casing
+                   "switch","case","default", "fallthrough", -- casing (fallthrough is reserved... it would require to translate with 'goto', but that would require Lua 5.2 or later)
 				   "repeat","until","forever","loopwhile", -- basic looping
 				   "do","end", -- Basic scope 
 				   "if","then","else","elseif", -- if
 				   "while", -- while
 				   "for", -- for
 				   "cfor", -- reserved. Idea for c-syntax for like this "for (i=1;i<=10;i++)".  But not planned for short term
-				   "global","public","private","final","abstract", "get", "set", -- needed for declarations
+				   "global","public","private","final","abstract", "get", "set", "local", -- needed for declarations
 				   "class","module","group","quickmeta",
 				   "mod", -- Neil will replace that with % -- Just a nice thing for BASIC and Pascal coders
 				   "return", -- We need that one, don't we?
@@ -44,6 +45,9 @@ local keywords = { "void","int","byte","number","bool","boolean","delegate","fun
 				   "nil", "null", -- "null" will be replaced by "nil"
 
 }
+
+local declasupport = {"global","public","private","final","abstract", "get", "set", "local"}
+local types = {"void","int","string","bool","boolean","delegate","function","userdata","number"}
 
 local UsedByNeil = {}
 
@@ -250,6 +254,10 @@ _Neil.Globals = setmetatable({},{
           _Neil.Assert(not want.Constant,k.." is a constant and cannot be overwritten")
           _Neil.Assert((not want.ReadOnly) or (ReadOnlyWrite.Globals),k.." is read-only and cannot be overwritten")
           Globals[uk].Value = ConvType(v,Globals[uk].Type,k)
+		  if want.UndefinedConstant then
+			 want.Constant = true
+			 want.UndefinedConstant = nil
+	      end
         end,
       __call=function(s,newk,oftype,rw,defaultvalue)
           local uk = newk:upper()
@@ -270,6 +278,54 @@ _Neil.Globals = setmetatable({},{
           Globals[uk] = newdec
         end
 })
+
+-- Locals
+local function Local_Index(table,key)
+	local uk = key:upper()
+    _Neil.Assert(table[uk],"Reading unknown local identifier \""..k.."\"!")
+     return Local[uk].Value
+end
+
+local function Local_NewIndex(table,key,value)
+      local uk = key:upper()
+      local want = table[uk]
+      _Neil.Assert(want,"Defining unknown local identifier \""..k.."\"!")          
+      _Neil.Assert(not want.Constant,k.." is a constant and cannot be overwritten")
+      _Neil.Assert((not want.ReadOnly) or (ReadOnlyWrite.Globals),k.." is read-only and cannot be overwritten")
+      table[uk].Value = ConvType(v,table[uk].Type,k)
+	  if want.UndefinedConstant then
+			 want.Constant = true
+			 want.UndefinedConstant = nil
+	  end
+end
+
+local function Local_Call(table,newk,oftype,rw,defaultvalue)
+          local uk = newk:upper()
+          _Neil.Assert(not table[uk],"Duplicate global identifier "..newk)
+          local newdec = {}
+          if oftype=="string" then
+              defaultvalue = defaultvalue or ""
+          elseif oftype=="number" or oftype=="byte" or oftype=="int" then
+              defaultvalue = defaultvalue or 0 
+          elseif oftype=="boolean" or oftype=="bool" then
+              oftype="bool"
+              if defaultvalue==nil then defaultvalue=false end
+          end
+          newdec.Value = ConvType(defaultvalue,oftype,"New local "..newk)
+          newdec.Type = oftype
+          newdec.ReadOnly = rw:lower()=="readonly"
+          newdec.Constant = rw:lower()=="const" or rw:lower()=="constant"
+          table[uk] = newdec
+end
+
+function _Neil.CreateLocals()
+	local truetable = {}
+	return setmetatable({},{
+		__index     = function(s,k)   return Local_Index(truetable,k) end,
+		__newindex  = function(s,k,v) return Local_NewIndex(truetable,k,v) end,
+		__call      = function(s,...) return Local_Call(truetable,...) end
+	})
+end	
 
 
 -- Regular Serialize
@@ -422,6 +478,7 @@ end
 local function ClassDestructor(class,key)
 end
 
+
 function _Neil.ClassNew(nameclass)
 	-- Does this class exist?
 	local ucln = nameclass:upper(); if not _Neil.Assert(Globals[ucln],"No Neil Identifier known as "..nameclass) then return end
@@ -546,7 +603,7 @@ local function Macro(script,chunk)
 	return ret,"All clear!"
 end
 
--- Chop codeup
+-- Chop code up
 local function Chop(script,chunk)
 	local allowtalk = true -- debug!
 	local talk = function(...) 
@@ -589,12 +646,12 @@ local function Chop(script,chunk)
 			elseif w.kind~="" then 
 				clean[#clean+1] = w 
 			end
-			if w.word=="=" and haakjes<=0 then 
-				if not _Neil.Assert(not definition,"Syntax error in line #"..ins.linenumber) then return end
-				ins.define = clean
-				clean = {}
-				definition = "definition"
-			elseif w.word == "+=" then
+			--if w.word=="=" and haakjes<=0 then 
+			--	if not _Neil.Assert(not definition,"Syntax error in line #"..ins.linenumber) then return end
+			--	ins.define = clean
+			--	clean = {}
+			--	definition = "definition"
+			--[[else]]if w.word == "+=" then
 				if not _Neil.Assert(not definition,"Syntax error in line #"..ins.linenumber) then return end
 				ins.define = clean
 				clean = {}
@@ -754,13 +811,158 @@ end
 
 
 -- Translate
+local scopes = { [0]={id="GLOBAL",type="GLOBAL",identifiers={}}
+local usedscopeids = {}
+local cnt = -1
+setmetatable(scopes[0].identifiers,{
+	__index = function(s,key)
+		local Got = Globals[key:upper()]
+		if Got then 
+			if Got.Type=="plua" then return Got.PLua end
+			return _Neil.Neil..".Globals."..key 
+		else 
+			return nil 
+		end
+	end,
+	__newindex = function(s,key,value)
+		error("FATAL ERROR! READ-ONLY GLOBAL SCOPE CHECK DEFINITION DONE ("..key.."="..tostring(value)..")")
+	end
+})
+local function NewScope(script,scopetype)
+	local id
+	scopetype = scopetype:lower()
+	repeat
+		cnt = cnt + 1
+		id = string.format("Neil_Scope_%10X_%s")
+	until (not usedscopeids[id])
+	usedscopeids[id] = true
+	scopes[#scopes+1] = {
+		id = id,
+		type = scopetype
+		identifiers={}
+	}
+	if scopetype~="declaration" and scopetype~="class" and scopetype~="group" and scopetype~="quickmeta" then
+		script = script .. string.format("; local %s_locals = %s.CreateLocals(); ",id,_Neil.Neil)
+	end
+	return script,scopes,id
+end
+
+local function EndScope(script)
+	scopes[#scopes] = nil
+	return script,scopes[#scopes]
+end
+
+local function DeclaHelp(w)
+	for _,ww in ipairs( declasupport ) do if ww==w then return true end 
+	return false
+end
+
+local function IsType(w)
+	if _Neil.Globals.Prefixed(w:lower(),"class.") then return true end
+	for _,ww in ipairs(types) do if w:lower()==w then return true end
+	return false
+end
+
+local function DefineFunction()
+	error("Function parsing not yet present")
+end
+
+local function DefineDelegate()
+	error("Delegate definition not yet present")
+end
+
+
+
+local function Declaration(ins,scope,alwaysplua,pluaprefix)
+	local i=1
+	local isglobal,rw = "notset","readwrite"
+	local identifier
+	local initvalue = "nil"
+	local istype
+	-- decladata
+	repeat
+		if i>#ins.word then return nil,"Declaration syntax error" end
+		local w = ins.word[i].lword
+		if w=="global" or w=="public" then
+			if isglobal~="notset" then return nil,"Protection level conflict" end
+			isglobal="global"
+		elseif w=="local" or w=="private"
+			if isglobal~="notset" then return nil,"Protection level conflict" end
+			isglobal="local"
+		elseif w=="static"
+			if isglobal~="notset" then return nil,"Protection level conflict" end
+			isglobal="static"			
+		elseif w=="readonly" or w=="const" then
+			if rw~="readwrite" then return nil,"Read-Write setting conflict" end
+			rw=w			
+		elseif IsType(ins.word[i].word)
+		    -- all okay
+		else
+			return nil,"Unexpected '"..ins.word[i].word.."' in declaration"
+		end
+		i = i + 1
+	until IsType(ins.word[i].lword)
+	istype = ins.word[i].word
+	-- all complete?
+	if i>=#ins.word then return nil,"Incomplete declaration" end
+	if isglobal=="notset" then isglobal=="local" end
+	-- identifier
+	i = i + 1
+	identifier = ins.word[i].word
+	-- verify
+	if keywords[identifier:lower()] then return nil,"Unexpected keyword ("..identifier..") in declaration" end
+	if isglobal=="global" and Globals[ins.word[i].uword] then return nil,"Duplicate global identifier: "..identifier 
+	elseif scope.identifiers[ins.word[i].uword] then return nil,"Duplicate local identifier: "..Identifier end
+	-- All clear... let's get this show on the road
+	-- End of line? Standard value then	
+	if i==#ins.word[i] then
+		if istype=="int" or number=="number" then
+			initvalue = "0"
+		elseif istype=="string" then
+			initvalue = '""'
+		elseif istype=="bool" or istype=="boolean"
+			initvalue = "false"
+		end
+	-- There is a definition?
+	elseif ins.word[i+1]=="=" then
+		if not ins.word[i+2] then 
+			return nil,"Value expected" 
+		elseif IsType(ins.word[i+2].word) then
+			DefineDelegate()
+		else
+			LitTrans(ins,i+2)
+		end
+	elseif ins.word[i+1]=="(" then
+	end
+	return nil,"Nothing yet, but from here things SHOULD be okay"
+end
+		
+
+end
+local function Translate(chopped,chunk)
+	local ret,scope,scopeid = NewScope("--[[ Neil Translation stareted "..os.date().."; "..os.time().." ]]\t ","script")
+	local alwaysplua = false
+	local pluaprefix
+	for insid,ins in ipairs(chopped.instructions) do
+		if DeclaHelp(ins.word[1].lword) or IsType(ins.word[1].word) then
+			local success,err = Declaration(ins,scope,alwaysplua)
+			if not success then return nil,err.." in line "..ins.linenumber.." ("..chunk..")" end
+		end
+	end
+end
+
 function _Neil.Translate(script,chunk)
+	TranslationCount = TranslationCount + 1
 	-- print("Ori\n",script,"/Ori")
 	local macroed,macroerror = Macro(script,chunk); if not macroed then _Neil.Error("Macro error: "..macroerror) return nil,"Macro error: "..macroerror end
 	-- print(macroed) error("Crash!") -- debug
 	local chopped = Chop(macroed)
 	print(Serialize("chopped",chopped))
-	return nil,"Sorry translate does not yet work!"
+	-- return nil,"Sorry translate does not yet work!"
+	local ret,error = Translate(chopped,chunk)
+	if not ret then 
+		return nil,"Neil Translation error: "..error 
+	end
 end
 
 
@@ -830,4 +1032,37 @@ end
 
 	
 -- Closure
-return _Neil
+-- return _Neil
+return setmetatable({},{
+	__index = function(s,k)
+		if not _Neil[k] then
+			error("Neil does not have a member named "..k)
+			-- Assert would have to create the string above regardless if the condition was right or not!
+			-- That would only cause a needless slowdown due to RAM allocations and release that are never needed until things actually do go wrong!
+			-- And when things do go wrong that extra action doesn't matter anymore.
+		end
+		return _Neil[k]
+	end,
+	__newindex = function(s,k,v)
+		if k=="Neil" then
+			if TranslationCount==1 then
+				error("There's already a translation done! Therefore the field 'Neil' cannot be modified anymore!")
+			elseif TranslationCount>1 then
+				error(TranslationCount.." translations have been done, already! Therefore the field 'Neil' cannot be modified anymore!")
+			else
+				assert(type(v)=="string","Field Neil must contain a string value and not a "..type(v))
+				_Neil.Neil = v
+			end
+		elseif k=="ReadFile" then
+			_Neil.ReadFile   = v or readAll		assert(type(_Neil.ReadFile)=="function","Field ReadFile must be a function, and not a "..type(v))
+		elseif k=="ReadDir" then
+			_Neil.ReadDir    = v or readDir		assert(type(_Neil.ReadDir)=="function","Field ReadDir must be a function, and not a "..type(v))
+		elseif k=="FileExists" then
+			_Neil.FileExists = v or fileExists  assert(type(_Neil.FileExists)=="function","Field FileExists must be a function, and not a "..type(v))
+		elseif k=="DirExists" then
+			_Neil.DirExists  = v or dirExists	assert(type(_Neil.DirExists)=="function","Field DirExists must be a function, and not a "..type(v))
+		else
+			error("Neil field "..k.." is read-only")
+		end
+	end
+})
