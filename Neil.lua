@@ -811,7 +811,7 @@ end
 
 
 -- Translate
-local scopes = { [0]={id="GLOBAL",type="GLOBAL",identifiers={}}
+local scopes = { [0]={id="GLOBAL",type="GLOBAL",identifiers={}}}
 local usedscopeids = {}
 local cnt = -1
 setmetatable(scopes[0].identifiers,{
@@ -833,18 +833,18 @@ local function NewScope(script,scopetype)
 	scopetype = scopetype:lower()
 	repeat
 		cnt = cnt + 1
-		id = string.format("Neil_Scope_%10X_%s")
+		id = string.format("Neil_Scope_%10X_%s",cnt,scopetpe)
 	until (not usedscopeids[id])
 	usedscopeids[id] = true
 	scopes[#scopes+1] = {
 		id = id,
-		type = scopetype
+		type = scopetype,
 		identifiers={}
 	}
 	if scopetype~="declaration" and scopetype~="class" and scopetype~="group" and scopetype~="quickmeta" then
 		script = script .. string.format("; local %s_locals = %s.CreateLocals(); ",id,_Neil.Neil)
 	end
-	return script,scopes,id
+	return script,scopes[#scopes],id
 end
 
 local function EndScope(script)
@@ -853,13 +853,13 @@ local function EndScope(script)
 end
 
 local function DeclaHelp(w)
-	for _,ww in ipairs( declasupport ) do if ww==w then return true end 
+	for _,ww in ipairs( declasupport ) do if ww==w then return true end end
 	return false
 end
 
 local function IsType(w)
 	if _Neil.Globals.Prefixed(w:lower(),"class.") then return true end
-	for _,ww in ipairs(types) do if w:lower()==w then return true end
+	for _,ww in ipairs(types) do if w:lower()==w then return true end end
 	return false
 end
 
@@ -881,70 +881,74 @@ local function Declaration(ins,scope,alwaysplua,pluaprefix)
 	local istype
 	-- decladata
 	repeat
-		if i>#ins.word then return nil,"Declaration syntax error" end
-		local w = ins.word[i].lword
+		if i>#ins.words then return nil,"Declaration syntax error" end
+		local w = ins.words[i].lword
 		if w=="global" or w=="public" then
 			if isglobal~="notset" then return nil,"Protection level conflict" end
 			isglobal="global"
-		elseif w=="local" or w=="private"
+		elseif w=="local" or w=="private" then
 			if isglobal~="notset" then return nil,"Protection level conflict" end
 			isglobal="local"
-		elseif w=="static"
+		elseif w=="static" then
 			if isglobal~="notset" then return nil,"Protection level conflict" end
 			isglobal="static"			
 		elseif w=="readonly" or w=="const" then
 			if rw~="readwrite" then return nil,"Read-Write setting conflict" end
 			rw=w			
-		elseif IsType(ins.word[i].word)
+		elseif IsType(ins.words[i].word) then
 		    -- all okay
 		else
 			return nil,"Unexpected '"..ins.word[i].word.."' in declaration"
 		end
 		i = i + 1
-	until IsType(ins.word[i].lword)
-	istype = ins.word[i].word
+	until IsType(ins.words[i].lword)
+	istype = ins.words[i].word
 	-- all complete?
-	if i>=#ins.word then return nil,"Incomplete declaration" end
-	if isglobal=="notset" then isglobal=="local" end
+	if i>=#ins.words then return nil,"Incomplete declaration" end
+	if isglobal=="notset" then isglobal="local" end
 	-- identifier
 	i = i + 1
-	identifier = ins.word[i].word
+	identifier = ins.words[i].word
 	-- verify
 	if keywords[identifier:lower()] then return nil,"Unexpected keyword ("..identifier..") in declaration" end
-	if isglobal=="global" and Globals[ins.word[i].uword] then return nil,"Duplicate global identifier: "..identifier 
-	elseif scope.identifiers[ins.word[i].uword] then return nil,"Duplicate local identifier: "..Identifier end
+	if isglobal=="global" and Globals[ins.words[i].uword] then 
+		return nil,"Duplicate global identifier: "..identifier 
+	elseif scope.identifiers[ins.words[i].uword] then 
+		return nil,"Duplicate local identifier: "..Identifier 
+	end
 	-- All clear... let's get this show on the road
 	-- End of line? Standard value then	
-	if i==#ins.word[i] then
+	if i==#ins.words[i] then
 		if istype=="int" or number=="number" then
 			initvalue = "0"
 		elseif istype=="string" then
 			initvalue = '""'
-		elseif istype=="bool" or istype=="boolean"
+		elseif istype=="bool" or istype=="boolean" then
 			initvalue = "false"
 		end
 	-- There is a definition?
-	elseif ins.word[i+1]=="=" then
-		if not ins.word[i+2] then 
+	elseif ins.words[i+1]=="=" then
+		if not ins.words[i+2] then 
 			return nil,"Value expected" 
-		elseif IsType(ins.word[i+2].word) then
+		elseif IsType(ins.words[i+2].word) then
 			DefineDelegate()
 		else
 			LitTrans(ins,i+2)
 		end
-	elseif ins.word[i+1]=="(" then
+	elseif ins.words[i+1]=="(" then
+		error("No functions yet")
 	end
 	return nil,"Nothing yet, but from here things SHOULD be okay"
 end
 		
 
-end
+
 local function Translate(chopped,chunk)
 	local ret,scope,scopeid = NewScope("--[[ Neil Translation stareted "..os.date().."; "..os.time().." ]]\t ","script")
 	local alwaysplua = false
 	local pluaprefix
 	for insid,ins in ipairs(chopped.instructions) do
-		if DeclaHelp(ins.word[1].lword) or IsType(ins.word[1].word) then
+		if DeclaHelp(ins.words[1].lword) or IsType(ins.words[1].word) then
 			local success,err = Declaration(ins,scope,alwaysplua)
 			if not success then return nil,err.." in line "..ins.linenumber.." ("..chunk..")" end
 		end
