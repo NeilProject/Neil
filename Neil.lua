@@ -1,7 +1,7 @@
 -- <License Block>
 -- Neil.lua
 -- Neil
--- version: 20.08.02
+-- version: 20.08.03
 -- Copyright (C) 2020 Jeroen P. Broks
 -- This software is provided 'as-is', without any express or implied
 -- warranty.  In no event will the authors be held liable for any damages
@@ -63,7 +63,8 @@ local ReadOnlyWrite = {}
 
 -- Check Type
 local CTCase
-local function ConvType(v,wanttype,key)  
+local function ConvType(v,wanttype,key,strict)  
+  -- If "strict" is set to 'true' the value 'nil' won't be accepted for string and boollean variables
   local kk = ""
   if key then
      kk = " for "..key
@@ -90,7 +91,10 @@ local function ConvType(v,wanttype,key)
          _Neil.Assert(type(v)=="boolean","Boolean required"..kk)
          return v
         end,
-       ['boolean'] = function(v) return CTCase[wanttype].bool(v) end,
+       ['boolean'] = function(v) 
+	        if strict then _Neil.Assert( v~=nil , "Boolean required... and got 'nil'" ) end
+			return CTCase[wanttype].bool(v) 
+		end,
        ['table'] = function(v)
           _Neil.Assert(type(v)=="table","Table required"..kk)
           return v
@@ -105,6 +109,7 @@ local function ConvType(v,wanttype,key)
        end,   
        ['string'] = function(v)
           if type(v)=="nil" then
+			 _Neil.Assert(not strict,"Got nil, but expected a string"..k)
              return "nil"             
           elseif type(v)=="string" then   
              return v
@@ -299,13 +304,15 @@ local function Local_NewIndex(table,key,value)
 	  end
 end
 
-local function Local_Call(table,newk,oftype,rw,defaultvalue)
+local function Local_Call(table,newk,oftype,rw,defaultvalue,strict)
           local uk = newk:upper()
           _Neil.Assert(not table[uk],"Duplicate global identifier "..newk)
           local newdec = {}
           if oftype=="string" then
+			  if strict then _Neil.Assert(defaultvalue,"String value expected for new local "..newk) end
               defaultvalue = defaultvalue or ""
           elseif oftype=="number" or oftype=="byte" or oftype=="int" then
+			  if strict then _Neil.Assert(defaultvalue,"Numberic value expected for new local "..newk) end
               defaultvalue = defaultvalue or 0 
           elseif oftype=="boolean" or oftype=="bool" then
               oftype="bool"
@@ -833,7 +840,7 @@ local function NewScope(script,scopetype)
 	scopetype = scopetype:lower()
 	repeat
 		cnt = cnt + 1
-		id = string.format("Neil_Scope_%10X_%s",cnt,scopetpe)
+		id = string.format("Neil_Scope_%010X_%s",cnt,scopetpe)
 	until (not usedscopeids[id])
 	usedscopeids[id] = true
 	scopes[#scopes+1] = {
@@ -845,6 +852,10 @@ local function NewScope(script,scopetype)
 		script = script .. string.format("; local %s_locals = %s.CreateLocals(); ",id,_Neil.Neil)
 	end
 	return script,scopes[#scopes],id
+end
+
+local function CurrentScope()
+	return scopes[#scopes],scopes[#scopes].id
 end
 
 local function EndScope(script)
@@ -863,8 +874,68 @@ local function IsType(w)
 	return false
 end
 
-local function DefineFunction()
-	error("Function parsing not yet present")
+local function DefineFunction(instruction,startword,returntype,alwaysplua,pluaprefix,needself)
+	local funcform = "function ("
+	local startcheck = ""
+	local params = {}
+	local pos = startword
+	local words = instruction.words
+	if needself then params[1] = { type="var", name="self" } end -- Needed for class methods
+	while words[pos].word~=")" do
+		local param = {}
+		params[#params+1] = param
+		-- if words[pos].word==")" then break end
+		if pos>=#words then 			
+			return nil,"Function definition syntax error (incompleteness)" 
+		end
+		if IsType(words[pos].word) then
+			param.type=words[pos].lword
+			pos = pos + 1
+		end
+		if words[pos].kind~="identifier" then return nil,"Function definition syntax error (identiefier expected)" end
+		param.name = words[pos].word
+		pos = pos + 1
+		if words[pos].word==")" then break end
+		if words[pos].word=="=" then 
+			pos = pos + 1
+			if pos>=#words then return nil,"Function definition syntax error (optional default value incompleteness)" end
+			if words[pos].kind=="number" or word[pos].lword=="true" or word[pos].lword=="false" or word[pos].lword=="nil" then 
+				param.default = words[pos].word
+				pos = pos + 1
+			elseif words[pos].kind=="string" then
+				param.default = '"'..words[pos].word..'"'
+				pos = pos + 1
+			elseif words[pos].lword=="null" then
+				param.default = "nil"
+				pos = pos + 1
+			else
+				return nil,"Function definition syntax error (constant value expected)"
+			end
+		end
+		if words[pos].word==")" then break end
+		if words[pos].word~="," then return nil,"Function definition syntax error (comma expected)" end
+	end
+	-- print(_Neil.Globals.Serialize("Parameters",params))
+	local tscript,tscope,tid = NewScope("",returntype.."-function")
+	startcheck = tscript
+	for i,param in ipairs(params) do
+		if i~=1 then funcform = funcform ..", " end
+		funcform = funcform .. "neil_function_arg"..i
+		if param.type=="plua" or alwaysplua  then
+			startcheck = startcheck .. "local "..pluaprefix..param.name
+			if param.default then startcheck = startcheck .. " = neil_function_arg"..i.." or "..param.default end
+			startcheck = startcheck .."; "
+			tscope.identifiers[param.name:upper()] = pluaprefix..param.name
+		else
+			local arg = "neil_function_arg"..i
+			if param.default then arg = arg .." or "..param.default end
+			startcheck = startcheck .. tid.."_locals(\""..param.name.."\",\""..param.type.."\",'readwrite',"..arg..",true); "
+			tscope.identifiers[param.name:upper()] = tid.."_locals."..param.name
+		end
+	end
+	funcform = funcform ..");\t\t "..startcheck
+	print(funcform) -- debug
+	return funcform
 end
 
 local function DefineDelegate()
@@ -879,8 +950,9 @@ local function Declaration(ins,scope,alwaysplua,pluaprefix)
 	local identifier
 	local initvalue = "nil"
 	local istype
+	local ret
 	-- decladata
-	repeat
+	while not IsType(ins.words[i].lword) do
 		if i>#ins.words then return nil,"Declaration syntax error" end
 		local w = ins.words[i].lword
 		if w=="global" or w=="public" then
@@ -901,8 +973,11 @@ local function Declaration(ins,scope,alwaysplua,pluaprefix)
 			return nil,"Unexpected '"..ins.word[i].word.."' in declaration"
 		end
 		i = i + 1
-	until IsType(ins.words[i].lword)
-	istype = ins.words[i].word
+	end
+	istype = ins.words[i].lword
+	if istype=="plua" and isglobal=="static" then
+		return nil,"pLua identifiers cannot be static"
+	end
 	-- all complete?
 	if i>=#ins.words then return nil,"Incomplete declaration" end
 	if isglobal=="notset" then isglobal="local" end
@@ -919,7 +994,7 @@ local function Declaration(ins,scope,alwaysplua,pluaprefix)
 	-- All clear... let's get this show on the road
 	-- End of line? Standard value then	
 	if i==#ins.words[i] then
-		if istype=="int" or number=="number" then
+		if istype=="int" or istype=="number" or istype=="byte" then
 			initvalue = "0"
 		elseif istype=="string" then
 			initvalue = '""'
@@ -927,7 +1002,7 @@ local function Declaration(ins,scope,alwaysplua,pluaprefix)
 			initvalue = "false"
 		end
 	-- There is a definition?
-	elseif ins.words[i+1]=="=" then
+	elseif ins.words[i+1].word=="=" then
 		if not ins.words[i+2] then 
 			return nil,"Value expected" 
 		elseif IsType(ins.words[i+2].word) then
@@ -935,22 +1010,26 @@ local function Declaration(ins,scope,alwaysplua,pluaprefix)
 		else
 			LitTrans(ins,i+2)
 		end
-	elseif ins.words[i+1]=="(" then
-		error("No functions yet")
+	elseif ins.words[i+1].word=="(" then
+		if rw~="readwrite" then return nil,"Read-Write permissions cannot be altered in general function definition" end
+		local data,error = DefineFunction(ins,i+2,istype)
+		if not data then return nil,error end
+		-- return nil,"No functions yet"
 	end
-	return nil,"Nothing yet, but from here things SHOULD be okay"
+	return nil,"Nothing yet, but from here things SHOULD be okay ("..istype..","..identifier..")"
 end
 		
 
 
 local function Translate(chopped,chunk)
-	local ret,scope,scopeid = NewScope("--[[ Neil Translation stareted "..os.date().."; "..os.time().." ]]\t ","script")
+	local ret,scope,scopeid = NewScope("--[[ Neil Translation stareted "..os.date().."; "..os.time().." ]]\t local __neil_init_functions = {};\t","script")
 	local alwaysplua = false
 	local pluaprefix
 	for insid,ins in ipairs(chopped.instructions) do
 		if DeclaHelp(ins.words[1].lword) or IsType(ins.words[1].word) then
 			local success,err = Declaration(ins,scope,alwaysplua)
 			if not success then return nil,err.." in line "..ins.linenumber.." ("..chunk..")" end
+			scope,scopeid = CurrentScope() -- Since functions can be define here, this is important!
 		end
 	end
 end
