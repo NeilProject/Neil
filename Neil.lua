@@ -1,7 +1,7 @@
 -- <License Block>
 -- Neil.lua
 -- Neil
--- version: 20.08.04
+-- version: 20.08.05
 -- Copyright (C) 2020 Jeroen P. Broks
 -- This software is provided 'as-is', without any express or implied
 -- warranty.  In no event will the authors be held liable for any damages
@@ -36,6 +36,7 @@ local keywords = { "void","int","byte","number","bool","boolean","delegate","fun
 				   "if","then","else","elseif", -- if
 				   "while", -- while
 				   "for", -- for
+				   "ipairs","pairs",
 				   "cfor", -- reserved. Idea for c-syntax for like this "for (i=1;i<=10;i++)".  But not planned for short term
 				   "global","public","private","final","abstract", "get", "set", "local", -- needed for declarations
 				   "class","module","group","quickmeta",
@@ -63,10 +64,11 @@ end
 local ReadOnlyWrite = {}
 
 -- Check Type
-local CTCase
-local function ConvType(v,wanttype,key,strict)  
+local CTCase,ConvType
+do local kk
+ function ConvType(v,wanttype,key,strict)  
   -- If "strict" is set to 'true' the value 'nil' won't be accepted for string and boollean variables
-  local kk = ""
+  -- local kk = ""
   if key then
      kk = " for "..key
   end
@@ -81,11 +83,11 @@ local function ConvType(v,wanttype,key,strict)
            end
          end,
        int = function(v)
-         _Neil.Assert(type(v)=="number","Number required"..kk)
+         _Neil.Assert(type(v)=="number","Number required"..kk.." (Got "..type(v)..")")
          return math.floor(v+.5)
        end,
        ['number'] = function(v)
-         _Neil.Assert(type(v)=="number","Number required"..kk)
+         _Neil.Assert(type(v)=="number","Number required"..kk.." (Got "..type(v)..")")
          return v
        end,
        ['bool'] = function(v)
@@ -127,10 +129,10 @@ local function ConvType(v,wanttype,key,strict)
 	-- TODO: Class check
 	print("WARNING! type "..wanttype.." cannot yet be fully processed yet!")
 	return tostring(v)
-  end
+  end 
   
   return CTCase[wanttype](v)
-end
+end end
 
 
 
@@ -149,6 +151,7 @@ local substr = string.sub
 local Globals
 Globals = {
 	['LUA'] = { Type='table', Value=_G, Constant=true },
+	['ASSERT'] = {Type=='delegate', Value=_Neil.Assert, Constant=true },
 	['GLOBALDUMP'] = { Type='delegate', Constant=true, Value=function() local ret="" for k,v in pairs(Globals) do ret = ret .. k .. " = "..tostring(v) end end },
 	['GLOBALEXISTS'] = {Type='delegate', Constant=true, value=function(n) 
 		_Neil.Assert(type(n)=="string","Global exists expects a string. Not a "..type(n))
@@ -314,7 +317,7 @@ local function Local_NewIndex(table,key,value)
       _Neil.Assert(want,"Defining unknown local identifier \""..key.."\"!")          
       _Neil.Assert(not want.Constant,key.." is a constant and cannot be overwritten")
       _Neil.Assert((not want.ReadOnly) or (ReadOnlyWrite.Globals),key.." is read-only and cannot be overwritten")
-      table[uk].Value = ConvType(v,table[uk].Type,k)
+      table[uk].Value = ConvType(value,table[uk].Type,k)
 	  if want.UndefinedConstant then
 			 want.Constant = true
 			 want.UndefinedConstant = nil
@@ -336,7 +339,8 @@ local function Local_Call(table,newk,oftype,rw,defaultvalue,strict)
               oftype="bool"
               if defaultvalue==nil then defaultvalue=false end
           end
-          newdec.Value = ConvType(defaultvalue,oftype,"New local "..newk)
+		  -- print(defaultvalue)
+          newdec.Value = ConvType(defaultvalue,oftype,"new "..oftype.." local "..newk)
           newdec.Type = oftype
           newdec.ReadOnly = rw:lower()=="readonly"
           newdec.Constant = rw:lower()=="const" or rw:lower()=="constant"
@@ -1216,7 +1220,11 @@ local function Translate(chopped,chunk)
 			if (not allowground) and scope.type=="script" then return nil,ins.words[1].word.." statement not allowed in ground scope" end
 			local trans,err = NewConditionScope(ins.words[1].lword,ins,unknowns)
 			if not trans then return nil,err.." in line "..ins.linenumber.." ("..chunk..")" end
-			ret = ret .. "if "..trans.." then "
+			if ins.words[1].lword=="if" then
+				ret = ret .. "if "..trans.." then "
+			else
+				ret = ret .. "while "..trans.." do "
+			end
 			scope,scopeid = CurrentScope()
 		elseif ins.words[1].lword=="elseif" then
 			if scope.type~="if" and scope.type~="elseif" then return nil,"'ElseIf without 'If' in line "..ins.linenumber.." ("..chunk..")" end
@@ -1248,6 +1256,12 @@ local function Translate(chopped,chunk)
 				ret = ret .. "return ".._Neil.Neil..".Globals.ConvType("..expression..",'"..ftype.."','return value',false)"
 				scope.returned = true
             end
+		elseif ins.words[1].lword=="init" then
+			if scope.type~="script" then return nil,"init only allowed in ground scope" end
+			ret = ret .. " __neil_init_functions[#__neil_init_functions+1] = function()"
+			script,scope,scopeid = NewScope("","init")
+			-- scope,scopeid = CurrentScope();		
+			ret = ret .. script
 		elseif ins.words[1].lword=="end" then
 			if suffixed(scope.type,"function") or suffixed(scope.type,"method") then
 				if scope.returntype~="void" and (not scope.returned) then
@@ -1262,15 +1276,19 @@ local function Translate(chopped,chunk)
 			ret = ret .. " --[[endscope: "..scope.id.."; "..scope.type.." ]] "
 			EndScope()
 			scope,scopeid = CurrentScope()
-		elseif ins.words[1].kind=="identifier" then
-		    error("Identifier from start processing not yet implemented")
+		elseif ins.words[1].kind=="identifier" and ins.kind=="instruction" then
+		   local result,error = LitTrans(ins,1,nil,unknowns)
+		   if not result then return nil,error.." in line "..ins.linenumber.." ("..chunk..")" end
+		   ret = ret .. result
+		  --  error("Identifier from start processing not yet implemented")
 		else
 			-- print("<translation>\n","\r"..ret.."\n</translation>") -- debug
 			error("I do not yet understand instruction "..insid.." in line "..ins.linenumber.." of chunk "..chunk..".\n I'm still being developed after all")
 		end
 	end
 	if scope.type~="script" then return nil,scope.type.." not properly ended" end
-	print("<translation>\n","\r"..ret.."\n</translation>") -- debug
+	ret = ret .."\n\n--[[ Closure ]] for _,initfunc in ipairs(__neil_init_functions) do initfunc() end"
+	 print("<translation>\n","\r"..ret.."\n</translation>") -- debug
 	return ret,"Ok"
 end
 
