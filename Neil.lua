@@ -1127,7 +1127,7 @@ local function Declaration(ins,scope,alwaysplua,pluaprefix,localplua)
 			name = _Neil.Neil..".Globals."..identifier
 		end
 	else -- In all other situations, I guess it's a local we got!
-		if type=="plua" then
+		if istype=="plua" then
 			name = pluaprefix..identifier
 			scope.identifiers[identifier:upper()] = name
 			ret = ret .. "local "..name..";\t"
@@ -1205,12 +1205,14 @@ end
 local function Translate(chopped,chunk)
 	local ret,scope,scopeid = NewScope("--[[ Neil Translation stareted "..os.date().."; "..os.time().." ]]\t local __neil_init_functions = {};\t","script")
 	local alwaysplua = false
-	local pluaprefix
+	local localplua = false
+	local pluaprefix = ""
 	local cline = 1
 	local unknowns = {}
 	local suffixed = _Neil.Globals.Suffixed
 	local allowground
 	local cfor = 0
+	local regions = 0
 	function _EndScope()
 		local s,sid = CurrentScope()
 		-- print("__Ending Scope: "..sid.." has locals: "..tostring(s.haslocals))
@@ -1230,10 +1232,42 @@ local function Translate(chopped,chunk)
 		elseif ins.kind=="whiteline" then
 		   ret = ret .."-- whiteline received --"
 		elseif DeclaHelp(ins.words[1].lword) or IsType(ins.words[1].word) then
-			local success,err = Declaration(ins,scope,alwaysplua)
+			local success,err = Declaration(ins,scope,alwaysplua,pluaprefix,localplua)
 			if not success then return nil,err.." in line "..ins.linenumber.." ("..chunk..")" end
 			scope,scopeid = CurrentScope() -- Since functions can be define here, this is important!
 			ret = ret .. success
+        elseif ins["kind"] == "preprocessor directive" then
+			local dir = ins.words[2].lword -- word 1 is always # after all!
+			ret = ret .. "-- directive: #"..dir
+			if dir=="macro" then
+			   -- Do nothing... Macros have already been taken care off after all!
+			elseif dir=="region" then
+			       regions = regions + 1
+			elseif dir=="endregion" then
+			       if regions<=0 then return nil,"#endregion without #region in line #"..ins.linenumber.." ("..chunk..")" end
+				   regions = regions - 1
+			elseif dir=="localplua" then
+				if #ins.words<=2 then
+					localplua = true
+				else 
+					localplua = ins.words[3].lword=="on"
+				end
+			elseif dir=="alwaysplua" then
+				if #ins.words<=2 then
+					alwaysplua = true
+				else 
+					alwaysplua = ins.words[3].lword=="on"
+				end
+				ret = ret .. " -- always plua: "..tostring(alwaysplua)
+			elseif dir=="pluaprefix" then
+				if #ins.words<=2 then
+					pluaprefix=""
+				else
+					pluaprefix = ins.words[3].word
+				end
+			else
+			       return nil,"Unknown directive #"..ins.words[2].word.." in line #"..ins.linenumber.." ("..chunk..")" 
+			end
 		elseif ins.words[1].lword=="if" or ins.words[1].lword=="while" then
 			if (not allowground) and scope.type=="script" then return nil,ins.words[1].word.." statement not allowed in ground scope" end
 			local trans,err = NewConditionScope(ins.words[1].lword,ins,unknowns)
