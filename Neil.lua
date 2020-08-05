@@ -36,7 +36,7 @@ local keywords = { "void","int","byte","number","bool","boolean","delegate","fun
 				   "if","then","else","elseif", -- if
 				   "while", -- while
 				   "for", -- for
-				   "ipairs","pairs",
+				   "ipairs","pairs","in",
 				   "cfor", -- reserved. Idea for c-syntax for like this "for (i=1;i<=10;i++)".  But not planned for short term
 				   "global","public","private","final","abstract", "get", "set", "local", -- needed for declarations
 				   "class","module","group","quickmeta",
@@ -165,6 +165,9 @@ Globals = {
 			return ret
 		end},
 	['COUT'] = {Type='delegate', Constant=true,Value=function(...) io.write(Globals.SOUT.Value(...)) end },
+	['PRINT'] = {Type='delegate', Constant=true, Value=function(...) print(...) end },
+	['SPRINTF'] = {Type='delegate', Constant=true, Value=string.format },
+	['PRINTF'] = {Type='delegate', Constant=true, Value=function(f,...) _Neil.Assert(type(f)=="string","Format value must be string") _Neil.Globals.Print(_Neil.Globals.SPrintF(f,...)) end},
 	['CONVTYPE'] = {Type='delegate', Constent=true, Value=ConvType },
 	['TOSTRING'] = {Type='delegate', Constant=true,Value=function(v) return ConvType(v,"string") end },
 	["REPLACE"] = {Type='delegate', Constant=true,Value=string.gsub },
@@ -871,7 +874,7 @@ local function NewScope(script,scopetype)
 		identifiers={}
 	}
 	if scopetype~="declaration" and scopetype~="class" and scopetype~="group" and scopetype~="quickmeta" then
-		script = script .. string.format(" local %s_locals = %s.CreateLocals(); ",id,_Neil.Neil)
+		script = script .. string.format(" local %s_locals = %s.CreateLocals(); --[[]]",id,_Neil.Neil)
 	end
 	return script,scopes[#scopes],id
 end
@@ -1031,13 +1034,15 @@ end
 
 
 
-local function Declaration(ins,scope,alwaysplua,pluaprefix)
+local function Declaration(ins,scope,alwaysplua,pluaprefix,localplua)
 	local i=1
 	local isglobal,rw = "notset","readwrite"
 	local identifier
 	local initvalue = "nil"
 	local istype
 	local ret = ""
+	localplua = localplua and scope.kind~="script"
+	alwaysplua = alwaysplua or localplua
 	-- decladata
 	while not IsType(ins.words[i].lword) do
 		if i>#ins.words then return nil,"Declaration syntax error" end
@@ -1134,6 +1139,7 @@ local function Declaration(ins,scope,alwaysplua,pluaprefix)
 			scope.identifiers[identifier:upper()] = scope.id.."_locals."..identifier
 			ret = ret .. ");\t"
 			name = scope.id.."_locals."..identifier
+			scope.haslocals = true
 		end
 	end
 	-- ret = ret .. name .. " = "
@@ -1204,6 +1210,18 @@ local function Translate(chopped,chunk)
 	local unknowns = {}
 	local suffixed = _Neil.Globals.Suffixed
 	local allowground
+	local cfor = 0
+	function _EndScope()
+		local s,sid = CurrentScope()
+		-- print("__Ending Scope: "..sid.." has locals: "..tostring(s.haslocals))
+		if not s.haslocals then
+			-- print("__No needless local table needed >>>\n",string.format(" local %s_locals = %s.CreateLocals(); --[[]]",sid,_Neil.Neil),string.format("--[[ No locals of scope %s ]]",sid))
+			--ret = ret:gsub(string.format("local %s_locals = %s.CreateLocals();",sid,_Neil.Neil),string.format("--[[ No locals of scope %s ",sid))
+			ret = ret:gsub(string.format("local %s_locals",sid),string.format("--[[ local %s_locals",sid))
+			-- print(ret)
+		end
+		EndScope()
+    end
 	for insid,ins in ipairs(chopped.instructions) do
 		if cline ~= ins.linenumber then ret = ret .."\n--[["..(ins.linenumber or "<??>").."]]\t"; cline=ins.linenumber end
 		--print(_Neil.Globals.Serialize("ins",ins))
@@ -1228,7 +1246,7 @@ local function Translate(chopped,chunk)
 			scope,scopeid = CurrentScope()
 		elseif ins.words[1].lword=="elseif" then
 			if scope.type~="if" and scope.type~="elseif" then return nil,"'ElseIf without 'If' in line "..ins.linenumber.." ("..chunk..")" end
-			EndScope()
+			_EndScope()
 			local trans,err = NewConditionScope(ins.words[1].lword,ins,unknowns)
 			if not trans then return nil,err.." in line "..ins.linenumber.." ("..chunk..")" end
 			ret = ret .. "elseif "..trans.." then "
@@ -1238,7 +1256,7 @@ local function Translate(chopped,chunk)
 			if #ins.words>2 then
 			   if ins.words[2].kind~="comment" then return nil,"Else does not take any more input" end
 			end
-			EndScope()
+			_EndScope()
 			NewScope("","else")
 			ret = ret .." else "
 			scope,scopeid = CurrentScope()
@@ -1274,15 +1292,48 @@ local function Translate(chopped,chunk)
 				ret = ret .."end"				
 			end
 			ret = ret .. " --[[endscope: "..scope.id.."; "..scope.type.." ]] "
-			EndScope()
+			_EndScope()
 			scope,scopeid = CurrentScope()
+        elseif ins.words[1].lword=="for" then
+			if (not allowground) and scope.type=="script" then return nil,ins.words[1].word.." statement not allowed in ground scope  ("..chunk..", line #"..ins.linenumber..")" end
+			local its = {}
+			local i = 1
+			repeat
+				i = i + 1 -- This skips 1, but 1 is only the keyword 'for' anyway
+				if i>=#ins.words then return nil,"incomplete for-loop ("..chunk..", line #"..ins.linenumber..")" end
+				if ins.words[i].word=="=" or ins.words[i].word=="in" then break 
+				elseif ins.words[i].kind == "identifier" then its[#its+1] = ins.words[i].word 
+				elseif ins.words[i].word == "," then -- Nothing
+				else return nil,"Unexpected "..ins.words[i].kind.." ("..ins.words[i].word..") in for-loop syntax ("..chunk..", line #"..ins.linenumber..")" end
+			until false
+			local s,e = LitTrans(ins,i+1,nil,unknowns)
+			if not s then return s,e.."("..chunk..", line #"..ins.linenumber..")" end
+			ret = ret .."for "
+			for i,it in ipairs(its) do
+			    if i>1 then ret = ret ..", " end
+				ret = ret .. it
+		    end
+			ret =  ret .. ins.words[i].word .. s .." do "
+			script,scope,scopeid = NewScope("","for-loop")
+			ret = ret .. script
+			for _,it in ipairs(its) do scope.identifiers[it:upper()] = it end
+		elseif ins.kind=="decrement" then
+		    local s,e = LitTrans(ins,1,unknowns)
+			if not s then return s,e.."("..chunk..", line #"..ins.linenumber..")" end
+			ret = ret .. s .. " = " .. _Neil.Neil..".Dec(" ..s..") "
+		elseif ins.kind=="increment" then
+		    local s,e = LitTrans(ins,1,unknowns)
+			if not s then return s,e.."("..chunk..", line #"..ins.linenumber..")" end
+			ret = ret .. s .. " = " .. _Neil.Neil..".Inc(" ..s..") "
 		elseif ins.words[1].kind=="identifier" and ins.kind=="instruction" then
+		   if (not allowground) and scope.type=="script" then return nil,"Instruction not allowed in ground scope ("..chunk..", line #"..ins.linenumber..")" end
 		   local result,error = LitTrans(ins,1,nil,unknowns)
 		   if not result then return nil,error.." in line "..ins.linenumber.." ("..chunk..")" end
 		   ret = ret .. result
 		  --  error("Identifier from start processing not yet implemented")
 		else
 			-- print("<translation>\n","\r"..ret.."\n</translation>") -- debug
+			print(Serialize("Instruction_"..insid,ins))
 			error("I do not yet understand instruction "..insid.." in line "..ins.linenumber.." of chunk "..chunk..".\n I'm still being developed after all")
 		end
 	end
