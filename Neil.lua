@@ -17,6 +17,25 @@
 -- misrepresented as being the original software.
 -- 3. This notice may not be removed or altered from any source distribution.
 -- </License Block>
+--[[
+Neil.lua
+Neil
+version: 20.08.06
+Copyright (C) 2020 Jeroen P. Broks
+This software is provided 'as-is', without any express or implied
+warranty.  In no event will the authors be held liable for any damages
+arising from the use of this software.
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+1. The origin of this software must not be misrepresented; you must not
+claim that you wrote the original software. If you use this software
+in a product, an acknowledgment in the product documentation would be
+appreciated but is not required.
+2. Altered source versions must be plainly marked as such, and must not be
+misrepresented as being the original software.
+3. This notice may not be removed or altered from any source distribution.
+]]
 -- Creation of library
 local _Neil = {}
 _Neil.Neil = "Neil"
@@ -28,7 +47,7 @@ local TranslationCount = 0
 
 -- keywords and operators
 local operators = {"++","--","!=" --[[Neil will replace != with ~=]],"~=","::=","+=","-=","==","<=",">=","//","||","&&" --[[ Maybe // is a bit odd to call an operator, but for Neil that's the easier way to work]], "/*", "*/",
-                    "+", "-", "=", ">",  "<", "!" --[[Neil will replace ! with 'not']] , "%","#","*","/","^",",","/","[","]"}
+                    "+", "-", "=", ">",  "<", "!" --[[Neil will replace ! with 'not']] , "%","#","*","/","^",",","/","[","]","&"}
 local keywords = { "void","int","byte","number","bool","boolean","delegate","function","plua", "userdata", -- types
                    "switch","case","default", "fallthrough", -- casing (fallthrough is reserved... it would require to translate with 'goto', but that would require Lua 5.2 or later)
 				   "repeat","until","forever","loopwhile", -- basic looping
@@ -48,7 +67,7 @@ local keywords = { "void","int","byte","number","bool","boolean","delegate","fun
 
 }
 
-local declasupport = {"global","public","private","final","abstract", "get", "set", "local","static" }
+local declasupport = {"global","public","private","final","abstract", "get", "set", "local","static","const" }
 local types = {"void","int","string","bool","boolean","delegate","function","userdata","number","table"}
 
 local UsedByNeil = {}
@@ -113,7 +132,7 @@ do local kk
 	   ['var'] = function(v) return v end,
        ['string'] = function(v)
           if type(v)=="nil" then
-			 _Neil.Assert(not strict,"Got nil, but expected a string"..k)
+			 _Neil.Assert(not strict,"Got nil, but expected a string"..kk)
              return "nil"             
           elseif type(v)=="string" then   
              return v
@@ -512,11 +531,6 @@ end
 local function ClassNewIndex(trueobject,self,key,value)
 end
 
-local function ClassStaticIndex(class,key)
-end
-
-local function ClassStaticNewIndex(class,key,value)
-end
 
 local function ClassDestructor(class,key)
 end
@@ -524,7 +538,7 @@ end
 local function ClassNew(class,...)
 end
 
-local function ClassStaticIndex(class,k)	
+local function ClassStaticIndex(class,actclass,k)	
 	if k==".neilclass" then
 		return true
 	elseif k==".hasmember" then
@@ -540,12 +554,48 @@ local function ClassStaticIndex(class,k)
 			if class.AbstractMethods[m] then return "Method","Abstract" end
 			return nil,nil
 		end
-	else	
-		error("Temp error: "..k)
+	elseif Globals.PREFIXED.Value(k,".") then
+		error("Command field unknown: "..k)
+	else
+		local uk = k:upper(0)
+		if class.Members[uk] or class.GetProperties[uk] or class.Methods[uk] then error("Member "..k.." is not static") end
+		if class.StaticMembers[uk] then return class.StaticMembers[uk].Value end
+		if class.StaticMethods[uk] then 
+			-- for k,v in pairs(class.StaticMethods[uk]) do print(type(v),k) end
+		    -- for k,v in pairs(actclass) do print("Class:",type(v),k) end
+			class.StaticMethods[uk].TrueMethod = class.StaticMethods[uk].TrueMethod or function(...) return class.StaticMethods[uk].Value(actclass.Value,...) end
+			return class.StaticMethods[uk].TrueMethod
+		end
+		if class.StaticGetProperties[uk] then
+			-- for k,v in pairs(actclass) do print("(Set)Class:",type(v),k) end
+			return class.StaticGetProperties[uk].Value(actclass.Value)  
+		end
+		if class.StaticSetProperties[uk] then error("Property '"..k.."' is only configured for writing\n"..debug.traceback()) end -- Safe... The SET has already been acted upon if it exists, and this function was exited!
+
+		error("Temp Static index error: "..k.." code not yet fully up to date to deal with this request! That's WIP for ya!")
 	end
 end
 
-local function ClassStaticNewIndex(class,k)
+local function ClassStaticNewIndex(class,actclass,k,v)
+	if false then -- reserved section for system defintions inside the class
+	else
+		local uk = k:upper(0)
+		if class.Members[uk] or class.SetProperties[uk] or class.Methods[uk] then error("Member "..k.." is not static") end
+		if class.StaticMembers[uk] then
+			local m = class.StaticMembers[uk]
+			if m.Constant then error("Cannot write to constant member: "..k) end
+			if m.ReadOnly and (not class.AllowReadOnly) then error("Cannot write to read-only member: "..k) end
+			m.Value = ConvType(v,m.Type,"Class member "..k)
+			return
+		end
+		if class.StaticMethods[uk] then error("Cannot overwrite static methods") end
+		if class.StaticSetProperties[uk] then
+			-- for k,v in pairs(actclass) do print("(Set)Class:",type(v),k) end
+			class.StaticSetProperties[uk].Value(actclass.Value,v) return 
+		end
+		if class.StaticGetProperties[uk] then error("Property '"..k.."' is only configured for reading\n"..debug.traceback()) end -- Safe... The SET has already been acted upon if it exists, and this function was exited!
+		error("Temp Static newindex error: "..k.." code not yet fully up to date to deal with this request! That's WIP for ya!")
+	end
 end
 
 -- Classes Creation
@@ -561,7 +611,7 @@ _Neil.Class = setmetatable({},{
 	})
 
 local GroupClasses = {}
-function Class.Create(name,private,extend)
+function Class.Create(name,private,extend)	
 	local ret = {}
 	ret.Class = { Members={}, Methods={}, GetProperties={},SetProperties={}, AbstractMethods={}, AbstractGetProperties={}, AbstractSetProperties={}, StaticMembers={}, StaticMethods={},StaticGetProperties={},StaticSetProperties={} }
 	ret.Type = "class"
@@ -571,15 +621,16 @@ function Class.Create(name,private,extend)
 				__call==function(s,...)
 				    return classnew(ret.Class,...)
 				end,
-				__index=function(s,k) return ClassStaticIndex(ret.Class,k) end,
-				__newindex=function(s,k,v) return ClassStaticNewIndex(ret.Class,k,v) end
+				__index=function(s,k) return ClassStaticIndex(ret.Class,ret,k) end,
+				__newindex=function(s,k,v) return ClassStaticNewIndex(ret.Class,ret,k,v) end
 			})
 		--end
 	if private then 
 		GroupClasses[name]=ret 
 	else
-		if not _Neil.Assert(not Globals[name:upper()],"I cannot create a class named "..name.." (Name is already taken)") then return nil end
+		if not _Neil.Assert(Globals[name:upper()]=="PLACEHOLDER","I cannot create a class named "..name) then return nil end
 		Globals[name:upper()] = ret
+		-- for k,v in pairs(Globals) do print(type(v),k) end -- debug
 	end
 end
 
@@ -605,19 +656,20 @@ function Class.NewMember(privateclass,nameclass,membertype,membername,protection
 	local nm = { Type = membertype }
 	if rw=="const" then static=true; nm.Constant=true end
 	if rw=="readonly" then nm.ReadOnly=true end
+	-- print("defining ",membertype," => ",value)
 	if membertype=="int" then
-		nm.value = math.floor(((tonumber(value) or 0)+.5))
+		nm.Value = math.floor(((tonumber(value) or 0)+.5))
 	elseif membertype=="byte" then
-		nm.value = math.floor(((tonumber(value) or 0)+.5)) % 255
+		nm.Value = math.floor(((tonumber(value) or 0)+.5)) % 255
 	elseif membertype=="boolean" then
-		nm.value=value~=nil and value~=false
+		nm.Value=value~=nil and value~=false
 	elseif membertype=="string" then
-		nm.value=tostring(value or "")
+		nm.Value=tostring(value or "")
 	elseif membertype=="table" then
 		if type(value)~="table" then value=nil end
-		nm.value=value or {}
+		nm.Value=value or {}
 	else
-		nm.value=value
+		nm.Value=value
 	end
 	if static then
 		cl.Class.StaticMembers[membername] = nm
@@ -626,6 +678,44 @@ function Class.NewMember(privateclass,nameclass,membertype,membername,protection
 	end
 
 end
+
+function Class.NewMethod(privateclass,nameclass,membertype,membername,protection,rw,static,value)
+	local cl,vcl = GetClass(privateclass,nameclass)
+	assert(not cl.Sealed,"Class is already sealed and ready for usage")
+	local t,s = vcl[".hasmember"](membername)
+	membertype = membertype:lower()
+	if t then error("There is already a "..t:lower().." ("..s..") named '"..membername.."' present in that class") end
+	assert(type(value)=="function","Illegal method: "..type(value))
+	local nm = {Type='Method', Constant=true, Value=value, ReturnType=membertype }
+	if static then
+		cl.Class.StaticMethods[membername:upper()] = nm
+	else 
+		cl.Class.Methods[membername:upper()] = nm
+	end	
+end
+
+function Class.NewProperty(privateclass,nameclass,membertype,membername,protection,rw,static,getorset,value)
+	local cl,vcl = GetClass(privateclass,nameclass)
+	assert(not cl.Sealed,"Class is already sealed and ready for usage")
+	local t,s = vcl[".hasmember"](membername)
+	membertype = membertype:lower()
+	if getorset:upper()=="GET" then getorset="Get" else getorset="Set" end
+	if t then 
+		if t:lower()=="property" then
+			if cl.Class['Static'..getorset..'Properties'][membername:upper()] or cl.Class[getorset..'Properties'][membername:upper()] then error("Dupe "..getorset:lower().." property "..membername) end			
+		else
+			error("There is already a "..t:lower().." ("..s..") named '"..membername.."' present in that class") 
+		end
+	end
+	assert(type(value)=="function","Illegal method: "..type(value))
+	local nm = {Type='Method', Constant=true, Value=value, ReturnType=membertype }
+	if static then		
+		cl.Class['Static'..getorset..'Properties'][membername:upper()] = nm
+	else 
+		cl.Class[getorset..'Properties'][membername:upper()] = nm
+	end	
+end
+
 
 function Class.Seal(privateclass,nameclass)
 	local cl = GetClass(privateclass,nameclass)
@@ -852,7 +942,9 @@ local function Chop(script,chunk)
 	function newword()
 		local oldword=cword()
 		-- print("Before trim: ",oldword.word)
-		oldword.word = _Neil.Globals.Trim(oldword.word)
+		if oldword.kind~="string" then
+			oldword.word = _Neil.Globals.Trim(oldword.word)
+		end
 		-- print("After trim: ",oldword.word)
 		if oldword.kind=="identifier" then
 			local cw = oldword.word:lower()
@@ -862,10 +954,12 @@ local function Chop(script,chunk)
 		end
 		if oldword.kind=="operator" then
 			if oldword.word == "!"  then oldword.word="not" oldword.kind="keyword" end
+			if oldword.word == "&"  then oldword.word=".."  oldword.kind="operator" end
 			if oldword.word == "&&" then oldword.word="and" oldword.kind="keyword" end
 			if oldword.word == "||" then oldword.word="or"  oldword.kind="keyword" end
 		elseif oldword.kind=="keyword" then
 			if oldword.word:upper()=="MOD" then oldword.word="%" oldword.kind="operator" end
+			if oldword.word:upper()=="INFINITY" then oldword.word="..." oldword.kind="operator" end
 		end
 		oldword.uword = oldword.word:upper()
 		oldword.lword = oldword.word:lower()
@@ -1063,7 +1157,7 @@ local function GetIdentifier(id,unk,unknownprefix)
 	for i=#scopes,0,-1 do
 		local f = scopes[i].identifiers[id]
 		if scopes[i].type=="class" or scopes[i].type=="group" or scopes[i].type=="module" then 
-		   classed="--[[CLASSED:"..scope[i].id.."]]" -- This is for classes to put things right!
+		   classed="--[[CLASSED:"..scopes[i].id.."]]" -- This is for classes to put things right!
         end 
 		if f then return f,"Ok" end
 	end
@@ -1133,7 +1227,9 @@ local function DefineFunction(instruction,startword,returntype,alwaysplua,pluapr
 	local params = {}
 	local pos = startword
 	local words = instruction.words
-	if needself then params[1] = { type="var", name="self" } end -- Needed for class methods
+	if needself then
+		params[1] = { type="plua", name="self", noprefix=true } 
+	end -- Needed for class methods
 	while words[pos].word~=")" do
 		local param = {}
 		params[#params+1] = param
@@ -1170,21 +1266,37 @@ local function DefineFunction(instruction,startword,returntype,alwaysplua,pluapr
 	end
 	-- print(_Neil.Globals.Serialize("Parameters",params))
 	local tscript,tscope,tid = NewScope("",returntype.."-function")
+	if needself then
+			tscope.identifiers.SELF = 'self'
+	end
 	tscope.returntype = returntype
 	startcheck = tscript
 	for i,param in ipairs(params) do
 		if i~=1 then funcform = funcform ..", " end
 		funcform = funcform .. "neil_function_arg"..i
 		if param.type=="plua" or alwaysplua  then
-			startcheck = startcheck .. "local "..pluaprefix..param.name
-			if param.default then startcheck = startcheck .. " = neil_function_arg"..i.." or "..param.default end
+			if param.noprefix then
+				startcheck = startcheck .. "local "..param.name
+			else
+				startcheck = startcheck .. "local "..pluaprefix..param.name
+			end
+			if param.default then 
+				startcheck = startcheck .. " = neil_function_arg"..i.." or "..param.default 
+			else
+				startcheck = startcheck .. " = neil_function_arg"..i
+			end
 			startcheck = startcheck .."; "
-			tscope.identifiers[param.name:upper()] = pluaprefix..param.name
+			if param.noprefix then
+				tscope.identifiers[param.name:upper()] = param.name
+			else
+				tscope.identifiers[param.name:upper()] = pluaprefix..param.name
+			end
 		else
 			local arg = "neil_function_arg"..i
 			if param.default then arg = arg .." or "..param.default end
 			startcheck = startcheck .. tid.."_locals(\""..param.name.."\",\""..param.type.."\",'readwrite',"..arg..",true); "
 			tscope.identifiers[param.name:upper()] = tid.."_locals."..param.name
+			tscope.haslocals = true
 		end
 	end
 	funcform = funcform ..")\t\t "..startcheck
@@ -1431,6 +1543,7 @@ local function Translate(chopped,chunk)
 		local initvalue = "nil"
 		local istype
 		local isstatic = false
+		local property
 		-- local ret = ""
 		local realtype
 		local scopeid = scope.id
@@ -1454,7 +1567,10 @@ local function Translate(chopped,chunk)
 				isstatic = true
 			elseif w=="readonly" or w=="const" then
 				if rw~="readwrite" then return "Read-Write setting conflict" end
-				rw=w			
+				rw=w
+			elseif w=="get" or w=="set" then
+				if property then return "Property syntax error" end
+				property = w
 			elseif IsType(ins.words[i].word) then
 				-- all okay
 			else
@@ -1482,21 +1598,42 @@ local function Translate(chopped,chunk)
 		end
 		-- All clear... let's get this show on the road
 		-- Always Plua
-		realtype = istype 
-
+		realtype = istype 		
 		-- Class.NewMember(privateclass,nameclass,membertype,membername,protection,rw,static,value)
-		if i>=#ins.words or ins.words[i+1].kind=="comment" then
+		if property then
+			local func
+			local nscopescript,nscope,nid = NewScope("","property-"..property.."-function")
+			if istype=="void" then return "Void type not valid for properties" end
+			if property=="get" then				
+				func = "function(self)"
+				nscope.returntype = istype
+			else
+				func = "function(self,value) value=".._Neil.Neil..".Globals.ConvType(value,'"..istype.."','property-set-value')"
+				nscope.identifiers.VALUE = "value"
+				nscope.returntype = "void"
+			end
+			nscope.identifiers.SELF = "self"
+			nscope.closure = ")"
+			ret = ret .. string.format("\t".. _Neil.Neil..".Class.NewProperty(%s,\"%s\", \"%s\", \"%s\", \"%s\", \"%s\", %s,\"%s\",    %s ",cl_private,scope.classname,istype,identifier,isglobal,rw,isstatic,property,func).."\t"..nscopescript
+			-- error("Property defintion still WIP")
+		elseif i>=#ins.words or ins.words[i+1].kind=="comment" then
+			if istype=="void" then return "Void type only allowed for functions and methods" end
 		    --                                             priv cname,  memtyp  memnam  prot   rw       static value
 			ret = ret .. string.format("\tClass.NewMember(%s,\"%s\", \"%s\", \"%s\", \"%s\", \"%s\", %s,    nil )",cl_private,scope.classname,istype,identifier,isglobal,rw,isstatic)
 			-- if isstatic and scope.class=="class" then scope.locals[membername] = _Neil.Neil..".Globals."..classname.."."..membername end
 			scope.identifiers[identifier:upper()] = "self."..identifier
 		elseif ins.words[i+1].word == "=" then
+			if istype=="void" then return "Void type only allowed for functions and methods" end
 			local value,err = LitTrans(ins,i+2,nil,unknown) -- (ins,pos,endword,unk,unknownprefix)
 			if not value then return err end
 			ret = ret .. string.format("\t".. _Neil.Neil..".Class.NewMember(%s,\"%s\", \"%s\", \"%s\", \"%s\", \"%s\", %s,    %s )",cl_private,scope.classname,istype,identifier,isglobal,rw,isstatic,value)
 			scope.identifiers[identifier:upper()] = "self."..identifier
-	    elseif ins.words[i+1].word ==" (" then
-		    error("Method parsing not yet supported")
+	    elseif ins.words[i+1].word =="(" then
+			local func,error = DefineFunction(ins,i+2,istype,false,false,true)
+			if not func then return error end
+			ret = ret .. string.format("\t".. _Neil.Neil..".Class.NewMethod(%s,\"%s\", \"%s\", \"%s\", \"%s\", \"%s\", %s,    %s ",cl_private,scope.classname,istype,identifier,isglobal,rw,isstatic,func)
+			scopes[#scopes].closure=")"
+		    -- error("Method parsing not yet supported")
 		end
 		-- error("Can't get on the move yet\n"..Serialize("class_ins["..insid.."]",ins).."\n\n"..ret)
 	end
@@ -1558,6 +1695,7 @@ local function Translate(chopped,chunk)
 			if Globals[classname] then
 				return nil,"Duplicate global identifier ("..chunk..":"..ins.linenumber..")"
 			end
+			Globals[classname] = "PLACEHOLDER"
 			local extend
 			script,scope,scopeid = NewScope("","class")
 			scope.classscope = "class"
