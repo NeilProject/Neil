@@ -28,7 +28,7 @@ local TranslationCount = 0
 
 -- keywords and operators
 local operators = {"++","--","!=" --[[Neil will replace != with ~=]],"~=","::=","+=","-=","==","<=",">=","//","||","&&" --[[ Maybe // is a bit odd to call an operator, but for Neil that's the easier way to work]], "/*", "*/",
-                    "+", "-", "=", ">",  "<", "!" --[[Neil will replace ! with 'not']] , "%","#","*","/","^",",","/"}
+                    "+", "-", "=", ">",  "<", "!" --[[Neil will replace ! with 'not']] , "%","#","*","/","^",",","/","[","]"}
 local keywords = { "void","int","byte","number","bool","boolean","delegate","function","plua", "userdata", -- types
                    "switch","case","default", "fallthrough", -- casing (fallthrough is reserved... it would require to translate with 'goto', but that would require Lua 5.2 or later)
 				   "repeat","until","forever","loopwhile", -- basic looping
@@ -48,8 +48,8 @@ local keywords = { "void","int","byte","number","bool","boolean","delegate","fun
 
 }
 
-local declasupport = {"global","public","private","final","abstract", "get", "set", "local"}
-local types = {"void","int","string","bool","boolean","delegate","function","userdata","number"}
+local declasupport = {"global","public","private","final","abstract", "get", "set", "local","static" }
+local types = {"void","int","string","bool","boolean","delegate","function","userdata","number","table"}
 
 local UsedByNeil = {}
 
@@ -99,17 +99,18 @@ do local kk
 			return CTCase[wanttype].bool(v) 
 		end,
        ['table'] = function(v)
-          _Neil.Assert(type(v)=="table","Table required"..kk)
+          _Neil.Assert(type(v)=="table" or v==nil,"Table required"..kk)
           return v
          end,
        ['userdata'] = function(v)
-          _Neil.Assert(type(v)=="userdata","UserData required"..kk)
+          _Neil.Assert(type(v)=="userdata" or v==nil,"UserData required"..kk)
           return v
          end,
        ['delegate'] = function(v)
-          _Neil.Assert(type(v)=="function","Delegate required"..kk)
+          _Neil.Assert(type(v)=="function or v==nil","Delegate required"..kk)
           return v
        end,   
+	   ['var'] = function(v) return v end,
        ['string'] = function(v)
           if type(v)=="nil" then
 			 _Neil.Assert(not strict,"Got nil, but expected a string"..k)
@@ -122,6 +123,7 @@ do local kk
              return tostring(v)
           end
        end,
+	   ['void'] = function() return nil end,
        var = function(v) return v end
   }
   -- TODO: Class-checktype
@@ -151,6 +153,8 @@ local substr = string.sub
 local Globals
 Globals = {
 	['LUA'] = { Type='table', Value=_G, Constant=true },
+	["TRANSLATION_TARGET"] = {Type="string", Value="Lua", Constant=true},
+	["CHR"] = { Type='delegate', Value=string.char, Constant=true },
 	['ASSERT'] = {Type=='delegate', Value=_Neil.Assert, Constant=true },
 	['GLOBALDUMP'] = { Type='delegate', Constant=true, Value=function() local ret="" for k,v in pairs(Globals) do ret = ret .. k .. " = "..tostring(v) end end },
 	['GLOBALEXISTS'] = {Type='delegate', Constant=true, value=function(n) 
@@ -431,7 +435,7 @@ end
 
 function _Neil.Dec(value) -- Using "--" will lead to translate to this function
 	if type(value)=="number" then
-		return value + 1
+		return value - 1
 	elseif type(value)=="table" and value[".neilclass"] and value[".contains"]("_Inc") then
 		return value._Inc()
 	else
@@ -494,7 +498,7 @@ function _Neil.Subtract(value,modvalue) -- Using "-=" will translate to this fun
 	end
 end
 
--- Classes
+-- Classes Usage
 local function ClassIndex(trueobject,self,key)
 end
 
@@ -510,6 +514,108 @@ end
 local function ClassDestructor(class,key)
 end
 
+local function ClassNew(class,...)
+end
+
+local function ClassStaticIndex(class,k)
+	if k==".neilclass" then
+		return true
+	elseif k==".hasmember" then
+		return function (m)
+			m = m:upper()
+			if class.Members[m] then return "Member","Regular" end
+			if class.StaticMembers[m] then return "Member","Static" end
+			if class.GetProperties[m] or class.SetProperties[m] then return "Property","Regular" end
+			if class.StaticGetProperties[m] or class.SetStaticProperties[m] then return "Property","Static" end
+			if class.AbstractGetProperties[m] or class.SetAbstractProperties[m] then return "Property","Abstract" end
+			if class.Methods[m] then return "Method","Regular" end
+			if class.StaticMethods[m] then return "Method","Static" end
+			if class.AbstractMethods[m] then return "Method","Abstract" end
+			return nil,nil
+		end
+	end
+end
+
+local function ClassStaticNewIndex(class,k)
+end
+
+-- Classes Creation
+local Class = {}
+_Neil.Class = setmetatable({},{
+	__index=function(s,k) 
+		if Class[k] then return Class[k] end
+		_Neil.Error(_Neil..".Class does not have a member named: "..k)
+	end,
+	__newindex=function()
+		error("READ-ONLY OVERWRITE ALERT!")
+	end
+	})
+
+local GroupClasses = {}
+function Class.Create(name,private,extend)
+	local ret = {}
+	ret.Class = { Members={}, Methods={}, GetProperties={},SetProperties={}, AbstractMethod={}, AbstracitGetProperties={}, AbstractSetProperties={}, StaticMembers={},StaticMethods={},StaticGetProperties={},StaticSetProperties={} }
+	ret.Type = "class"
+	ret.Constant = true
+	ret.Value = function(...) 
+			return setmetatable({},{
+				__call==function(s,...)
+				    return classnew(ret.Class,...)
+				end,
+				__index==function(s,k) return ClassStaticIndex(class,k) end,
+				__newindex=function(s,k,v) return ClassStaticNewIndex(class,k,v) end
+			})
+		end
+	if private then 
+		GroupClasses[name]=ret 
+	else
+		if not _Neil.Assert(not Globals[name:upper()],"I cannot create a class named "..name.." (Name is already taken)") then return nil end
+		Globals[name:upper()] = ret
+	end
+end
+
+local function GetClass(privateclass,classname)
+	if privateclass then
+		cl = GroupClasses[classname]
+	else
+		cl = Globals[classname:upper()]
+	end
+	assert(cl,"No class found name "..classname)
+	assert(cl.Type=="class","Not a class: "..classname)
+	return cl
+end
+
+function Class.NewMember(privateclass,nameclass,membertype,membername,protection,rw,static,value)
+	local cl = GetClass(privateclass,nameclass)
+	assert(not cl.Sealed,"Class is already sealed and ready for usage")
+	membername = membername:upper()
+	local t,s = cl[".hasmember"](membername)
+	membertype = mambertype:lower()
+	assert(not t,"There is already a "..t:lower().." ("..s..") named '"..membername.."' present in that class")
+	local nm = { Type = membertype }
+	if rw=="const" then static=true; nm.Constant=true end
+	if rw=="readonly" then nm.ReadOnly=true end
+	if membertype=="int" then
+		nm.value = math.floor(((tonumber(value) or 0)+.5))
+	elseif membertype=="byte" then
+		nm.value = math.floor(((tonumber(value) or 0)+.5)) % 255
+	elseif membertype=="boolean" then
+		nm.value=value~=nil and value~=false
+	elseif membertype=="string" then
+		nm.value=tostring(value or "")
+	elseif membertype=="table" then
+		if type(value)~="table" then value=nil end
+		nm.value=value or {}
+	else
+		nm.value=value
+	end
+	if static then
+		cl.StaticMembers[membername] = nm
+	else 
+		cl.Members[membername] = nm
+	end
+
+end
 
 function _Neil.ClassNew(nameclass)
 	-- Does this class exist?
@@ -686,10 +792,12 @@ local function Chop(script,chunk)
 			--[[else]]if w.word == "+=" then
 				if not _Neil.Assert(not definition,"Syntax error in line #"..ins.linenumber) then return end
 				ins.define = clean
+				ins.define[#ins.define] = nil
 				clean = {}
 				definition = "add"
 			elseif w.word == "-=" then
 				if not _Neil.Assert(not definition,"Syntax error in line #"..ins.linenumber) then return end
+				ins.define[#ins.define] = nil
 				ins.define = clean
 				clean = {}
 				definition = "subtract"
@@ -746,6 +854,11 @@ local function Chop(script,chunk)
 		oldword.uword = oldword.word:upper()
 		oldword.lword = oldword.word:lower()
 		instruction[#instruction].words[#instruction[#instruction].words+1] = {word="",kind=""}
+		if oldword.kind=="with-mark" then
+			-- print('with-mark',oldword.word)
+			if oldword.word=="$" then instruction[#instruction].words[#instruction[#instruction].words].kind = "member" end
+			if oldword.word=="$$" then instruction[#instruction].words[#instruction[#instruction].words].kind = "method" end
+		end
 		hexnum = false
 	end
 	local function cinstruction()
@@ -797,16 +910,35 @@ local function Chop(script,chunk)
 			multiline=false
 			if cword().word~="" then newword() end
 			cword().kind="string"
-		elseif (uasc>=65 and uasc<=90) or char=="_" or (((uasc>=48 and uasc<=57) or char==".") and cword().kind=="identifier")   then
-			if cword().kind~="identifier" and cword().word~="" then newword() end
-			cword().word = cword().word .. lchar
-			cword().kind = "identifier"
+		elseif (cword().kind=="member" or cword().kind=="method") and ( (uasc>=65 and uasc<=90) or char=="_" or (((uasc>=48 and uasc<=57) or char=="." or char==":") and #(cword().word)>0) ) then
+			cword().word = cword().word .. char
+			--print('mem')
+		elseif (uasc>=65 and uasc<=90) or char=="_" or (((uasc>=48 and uasc<=57) --[[or char=="."]]) and cword().kind=="identifier") then
+			--print("fuck:"..cword().kind..":"..cword().word)
+			if cword().kind~="member" and cword().kind~="method" and cword().kind~="identifier" and cword().word~="" then newword() end
+			cword().word = cword().word .. char
+			if cword().kind~="member" and cword().kind~="method" then cword().kind = "identifier"			  end
         elseif (uasc>=48 and uasc<=57) or (char=="." and cword().kind=="number") or (lchar=="x" and cword().word=="0") or (uasc>=65 and uasc<=70 and hexnum) then
 			if cword().kind~="number" and cword().word~="" then newword() end
 			cword().word = cword().word .. char
 			cword().kind = "number"
 			if lchar=="x" then hexnum=true end
-		elseif char=="!" or char=="%" or char=="#" or char=="^" or char=="*" or char=="(" or char==")" or char=="-" or char=="|" or char=="&" or char=="=" or char=="+" or char=="," or char=="/" or char==">" or char=="<" then
+		elseif char=="." then
+			newword()
+			cword().kind="member"
+		elseif char==":" then
+			newword()
+		    cword().kind="method"
+		elseif char=="$" then
+			if cword().kind=="with-mark" then
+				cword().word="$$"
+				-- double '$' is for method translation... Neil shouldn't need it, but for quick Lua objects it can be.
+			else
+				newword()
+				cword().word="$"
+				cword().kind="with-mark"
+			end
+		elseif char=="!" or char=="%" or char=="#" or char=="^" or char=="*" or char=="(" or char==")" or char=="-" or char=="|" or char=="&" or char=="=" or char=="+" or char=="," or char=="/" or char==">" or char=="<" or char=="[" or char=="]" then
 			if cword().kind~="operator" and cword().word~="" then newword() end
 			if cword().word~="" then
 				-- print(lastchar,char)
@@ -874,7 +1006,7 @@ local function NewScope(script,scopetype)
 		identifiers={}
 	}
 	if scopetype~="declaration" and scopetype~="class" and scopetype~="group" and scopetype~="quickmeta" then
-		script = script .. string.format(" local %s_locals = %s.CreateLocals(); --[[]]",id,_Neil.Neil)
+		script = script .. string.format(" local %s_locals = %s.CreateLocals(); _HW%s]]",id,_Neil.Neil,id)
 	end
 	return script,scopes[#scopes],id
 end
@@ -908,7 +1040,7 @@ local function IsType(w)
 	return false
 end
 
-local function GetIdentifier(id,unk)
+local function GetIdentifier(id,unk,unknownprefix)
 	local classed = ""
 	id = id:upper()
 	if _Neil.Globals.prefixed(id,"CLASS.") then error("Class recognition NOT yet supported!") end
@@ -922,10 +1054,20 @@ local function GetIdentifier(id,unk)
    if scopes[#scopes].type=="script" then 
 	  return nil,"Unknown identifier (forwarding not possible in ground scope) '"..id.."'"
    end   
-   return "@"..id.."@"   
+   unk.satisfied = unk.satisfied or {}
+   unk.unknown = unk.unknown or {}
+   unk.unknown[#unk.unknown+1] = { id=id,prefix=unknownprefix or ""}
+   return (unknownprefix or "") .. "@"..id.."@"   
 end
 
-local function LitTrans(ins,pos,endword)
+local function GetWith()
+	for i=#scopes,1,-1 do
+		if scopes[i].with then return scopes[i].with end
+	end
+	return _Neil.Neil..".Globals"
+end
+
+local function LitTrans(ins,pos,endword,unk,unknownprefix)
 	local fendword
 	local ret = ""
 	for i=pos,#ins.words do
@@ -940,19 +1082,25 @@ local function LitTrans(ins,pos,endword)
 		      ret = ret .. " "..word.word.." "
 		   end
         elseif word.kind == "keyword" then
-		   if word.lword == "not" or word.lword=="nil" or word.lword=="and" or word.lword=="or" or word.lword=="true" or word.lword=="false" then
+		   if word.lword == "not" or word.lword=="nil" or word.lword=="and" or word.lword=="or" or word.lword=="true" or word.lword=="false" or word.lword == "ipairs" or word.lword == "pairs" then
 		      ret = ret .. " "..word.lword.." "
 		   elseif word.lword == "null" then
-		      ret = ret .. " nil "
+		      ret = ret .. " nil "		   
 		   else
 		      return nil,"Unexpected keyword: "..word.word
 		   end
+		elseif word.kind == "member" then
+			ret = ret .."."..word.word
+		elseif word.kind == "method" then
+			ret = ret ..":"..word.word
+		elseif word.word == "$" or word.word=="$$" then
+			ret = ret .. GetWith()
         elseif word.kind == "string" then
 		   ret = ret .. ' "'..word.word..'" '
 		elseif word.kind == "number" then
 		   ret = ret .. " "..word.word.." "
         elseif word.kind == "identifier" then
-		   ret = ret .. " "..GetIdentifier(word.uword).." "
+		   ret = ret .. " "..GetIdentifier(word.uword,unk,unknownprefix).." "
 		elseif word.kind == "comment" then
 		   ret = ret .. "\t-- comment -- "
 		else
@@ -1041,6 +1189,7 @@ local function Declaration(ins,scope,alwaysplua,pluaprefix,localplua)
 	local initvalue = "nil"
 	local istype
 	local ret = ""
+	local realtype
 	localplua = localplua and scope.kind~="script"
 	alwaysplua = alwaysplua or localplua
 	-- decladata
@@ -1062,10 +1211,11 @@ local function Declaration(ins,scope,alwaysplua,pluaprefix,localplua)
 		elseif IsType(ins.words[i].word) then
 		    -- all okay
 		else
-			return nil,"Unexpected '"..ins.word[i].word.."' in declaration"
+			return nil,"Unexpected '"..ins.words[i].word.."' in declaration"
 		end
 		i = i + 1
 	end
+	-- print("Decladebug:",i,ins.words[i].word)
 	if isglobal=="notset" then isglobal = "local" end
 	istype = ins.words[i].lword
 	if istype=="plua" then
@@ -1095,6 +1245,7 @@ local function Declaration(ins,scope,alwaysplua,pluaprefix,localplua)
 	end
 	-- All clear... let's get this show on the road
 	-- Always Plua
+	realtype = istype 
 	if alwaysplua and (isglobal~="static") then
 		istype="plua"
 	end
@@ -1104,8 +1255,8 @@ local function Declaration(ins,scope,alwaysplua,pluaprefix,localplua)
 		local staticid = 0
 		local cheat
 		repeat
-			static = static + 1
-			cheat = string.format("__NEIL_STATIC_IDENTIFIER_FOR_SCOPE_%s_ID%010X"):toupper()
+			staticid = staticid + 1
+			cheat = string.format("__NEIL_STATIC_IDENTIFIER_FOR_SCOPE_%s_ID%010X",scope.id,staticid):upper()
 		until not Globals[cheat]
 		local new_static = {
 			Type=istype,
@@ -1113,7 +1264,7 @@ local function Declaration(ins,scope,alwaysplua,pluaprefix,localplua)
 		Globals[cheat] = new_static
 		if rw == "const" then new_static.UndefinedConstant = true 
 		elseif rw == "readonly" then new_static.UndefinedReadOnly = true end
-		scope.identifiers[identifier:upper()] = "_Neil.Globals."..cheat
+		scope.identifiers[identifier:upper()] = "Neil.Globals."..cheat
 		name = _Neil.Neil..".Globals."..cheat
 	elseif isglobal=="global" then
 		local new_global = { Type=istype }
@@ -1143,26 +1294,38 @@ local function Declaration(ins,scope,alwaysplua,pluaprefix,localplua)
 		end
 	end
 	-- ret = ret .. name .. " = "
-	-- End of line? Standard value then	
-	if i==#ins.words[i] then
+	-- End of line? Standard value then		
+	if i==#ins.words then
+	    if isglobal=="static" then ret = ret .. "if not __neil_staticsdefined['"..name.."'] then __neil_staticsdefined['"..name.."'] = true; " end
 		ret = ret .. name .. " = "
-		if istype=="int" or istype=="number" or istype=="byte" then
+		if realtype=="int" or realtype=="number" or realtype=="byte" then
 			initvalue = "0"
-		elseif istype=="string" then
+		elseif realtype=="string" then
 			initvalue = '""'
-		elseif istype=="bool" or istype=="boolean" then
+		elseif realtype=="bool" or realtype=="boolean" then
 			initvalue = "false"
+		elseif realtype=="table" then
+			initvalue = "{}"
+		else
+			initvalue = 'nil'
 		end
+		ret = ret .. initvalue
+		if isglobal=="static" then ret = ret .. " end " end
 	elseif ins.words[i+1].word=="=" then
+		if isglobal=="static" then ret = ret .. "if not __neil_staticsdefined['"..name.."'] then __neil_staticsdefined['"..name.."'] = true; " end
 		ret = ret .. name .. " = "
 		if not ins.words[i+2] then 
 			return nil,"Value expected" 
 		elseif IsType(ins.words[i+2].word) then
+		    if isglobal=="static" then return nil,"Static cannot be used for function defintions (also not for delegates) " end
 			ret = ret .. DefineDelegate()
 		else
+			-- print(i,i+2)
 			ret = ret .. LitTrans(ins,i+2)
 		end
+		if isglobal=="static" then ret = ret .. " end " end
 	elseif ins.words[i+1].word=="(" then
+	    if isglobal=="static" then return nil,"Static cannot be used for function defintions" end
 		if rw~="readwrite" then return nil,"Read-Write permissions cannot be altered in general function definition" end
 		local data,error = DefineFunction(ins,i+2,istype)
 		if not data then return nil,error end
@@ -1203,7 +1366,7 @@ end
 
 
 local function Translate(chopped,chunk)
-	local ret,scope,scopeid = NewScope("--[[ Neil Translation stareted "..os.date().."; "..os.time().." ]]\t local __neil_init_functions = {};\t","script")
+	local ret,scope,scopeid = NewScope("--[[ Neil Translation stareted "..os.date().."; "..os.time().." ]]\t local __neil_init_functions = {};\tlocal __neil_staticsdefined = {}","script")
 	local alwaysplua = false
 	local localplua = false
 	local pluaprefix = ""
@@ -1221,6 +1384,8 @@ local function Translate(chopped,chunk)
 			--ret = ret:gsub(string.format("local %s_locals = %s.CreateLocals();",sid,_Neil.Neil),string.format("--[[ No locals of scope %s ",sid))
 			ret = ret:gsub(string.format("local %s_locals",sid),string.format("--[[ local %s_locals",sid))
 			-- print(ret)
+		else
+			ret = ret:gsub(string.format("_HW%s",sid),string.format("--[[ %s ",sid))
 		end
 		EndScope()
     end
@@ -1302,6 +1467,10 @@ local function Translate(chopped,chunk)
 				end
 				ret = ret .. "return;"
 				scope.returned = true
+			elseif ftype=="plua" or ftype=="var" then
+				local expression,error = LitTrans(ins,2,nil,unknowns)
+				if not expression then return nil,error.." in line "..ins.linenumber.." ("..chunk..")" end
+				ret = ret .. "return "..expression
 			else
 				local expression,error = LitTrans(ins,2,nil,unknowns)
 				if not expression then return nil,error.." in line "..ins.linenumber.." ("..chunk..")" end
@@ -1321,6 +1490,8 @@ local function Translate(chopped,chunk)
 				end
 				ret = ret .."end\t"
 				if scope.closure then ret = ret..scope.closure.."\t" end
+			elseif scope.type=="repeat" then
+				return nil,"Repeat scope cannot be ended with the End keyword (Line #"..ins.linenumber.." in chunk "..chunk")"
 			else
 			    -- In all situations not noted above
 				ret = ret .."end"				
@@ -1335,7 +1506,9 @@ local function Translate(chopped,chunk)
 			repeat
 				i = i + 1 -- This skips 1, but 1 is only the keyword 'for' anyway
 				if i>=#ins.words then return nil,"incomplete for-loop ("..chunk..", line #"..ins.linenumber..")" end
-				if ins.words[i].word=="=" or ins.words[i].word=="in" then break 
+				if ins.words[i].word=="=" or ins.words[i].lword=="in" then 
+				   -- print ("break",ins.words[i].lword=="in",ins.words[i].lword) 
+				   break 
 				elseif ins.words[i].kind == "identifier" then its[#its+1] = ins.words[i].word 
 				elseif ins.words[i].word == "," then -- Nothing
 				else return nil,"Unexpected "..ins.words[i].kind.." ("..ins.words[i].word..") in for-loop syntax ("..chunk..", line #"..ins.linenumber..")" end
@@ -1347,10 +1520,33 @@ local function Translate(chopped,chunk)
 			    if i>1 then ret = ret ..", " end
 				ret = ret .. it
 		    end
-			ret =  ret .. ins.words[i].word .. s .." do "
+			-- print(i,ins.words[i].lword)
+			ret =  ret .. " ".. ins.words[i].lword .." ".. s .." do "
 			script,scope,scopeid = NewScope("","for-loop")
 			ret = ret .. script
 			for _,it in ipairs(its) do scope.identifiers[it:upper()] = it end
+		elseif ins.words[1].lword=="repeat" then
+			script,scope,scopeid = NewScope("","repeat")
+			ret = ret .. "repeat\t"..script
+		elseif ins.words[1].lword=="until" then
+			if scope.type~="repeat" then return nil,"Until without Repeat in line #"..ins.linenumber.." ("..chunk..")" end
+			local scr,err = LitTrans(ins,2,unknowns)
+			if not scr then return s,err.."("..chunk..", line #"..ins.linenumber..")" end
+			ret = ret .. "until "..scr.."\t"
+			_EndScope()
+			scope,scopeid = CurrentScope()
+		elseif ins.words[1].lword=="loopwhile" then
+			if scope.type~="repeat" then return nil,"LoopWhile without Repeat in line #"..ins.linenumber.." ("..chunk..")" end
+			local scr,err = LitTrans(ins,2,unknowns)
+			if not scr then return s,err.."("..chunk..", line #"..ins.linenumber..")" end
+			ret = ret .. "until not("..scr..")\t"
+			_EndScope()
+			scope,scopeid = CurrentScope()
+		elseif ins.words[1].lword=="forever" then
+			if scope.type~="repeat" then return nil,"Forever without Repeat in line #"..ins.linenumber.." ("..chunk..")" end
+			ret = ret .. "until false\t"
+			_EndScope()
+			scope,scopeid = CurrentScope()
 		elseif ins.kind=="decrement" then
 		    local s,e = LitTrans(ins,1,unknowns)
 			if not s then return s,e.."("..chunk..", line #"..ins.linenumber..")" end
@@ -1359,7 +1555,20 @@ local function Translate(chopped,chunk)
 		    local s,e = LitTrans(ins,1,unknowns)
 			if not s then return s,e.."("..chunk..", line #"..ins.linenumber..")" end
 			ret = ret .. s .. " = " .. _Neil.Neil..".Inc(" ..s..") "
-		elseif ins.words[1].kind=="identifier" and ins.kind=="instruction" then
+        elseif ins.kind=="add" then
+		    local ains = { words = ins.define }
+			local dw,de = LitTrans(ains,1,unknowns); if not dw then return nil,de.."("..chunk..", line #"..ins.linenumber..")" end
+			local vw,ve = LitTrans( ins,1,unknowns); if not vw then return nil,ve.."("..chunk..", line #"..ins.linenumber..")" end
+			ret = ret .. dw .. " = ".. _Neil.Neil..".Add("..dw..", "..vw..")"
+		elseif ins.words[1].word=="with" then
+			local script
+			script,scope,scopeid = NewScope("","with")
+			ret = ret .."do "..script
+			local dw,de = LitTrans(ins,2,unknowns); if not dw then return nil,de.."("..chunk..", line #"..ins.linenumber..")" end
+			ret = ret .."\t local with_"..scopeid.." = "..dw
+			scope.with = "with_"..scopeid
+			print("with "..scope.with.." <= "..dw)
+		elseif (ins.words[1].kind=="identifier"  or ins.words[1].kind=="with-mark") and ins.kind=="instruction" then
 		   if (not allowground) and scope.type=="script" then return nil,"Instruction not allowed in ground scope ("..chunk..", line #"..ins.linenumber..")" end
 		   local result,error = LitTrans(ins,1,nil,unknowns)
 		   if not result then return nil,error.." in line "..ins.linenumber.." ("..chunk..")" end
@@ -1372,7 +1581,8 @@ local function Translate(chopped,chunk)
 		end
 	end
 	if scope.type~="script" then return nil,scope.type.." not properly ended" end
-	ret = ret .."\n\n--[[ Closure ]] for _,initfunc in ipairs(__neil_init_functions) do initfunc() end"
+	_EndScope() -- Script scope must end too, you know!
+	ret = ret .."\n\n--[[ Closure ]] for _,initfunc in ipairs(__neil_init_functions) do initfunc() end; __neil_init_functions = nil"
 	 print("<translation>\n","\r"..ret.."\n</translation>") -- debug
 	return ret,"Ok"
 end
