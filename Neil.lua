@@ -1,7 +1,7 @@
 -- <License Block>
 -- Neil.lua
 -- Neil
--- version: 20.08.05
+-- version: 20.08.06
 -- Copyright (C) 2020 Jeroen P. Broks
 -- This software is provided 'as-is', without any express or implied
 -- warranty.  In no event will the authors be held liable for any damages
@@ -152,6 +152,13 @@ end
 local substr = string.sub
 local Globals
 Globals = {
+    ['EXPAND'] = {Type='delegate', Value=function (t,p)
+		assert(type(t)=="table")
+		p = tonumber(p) or 1                                 
+		if p<#t then return t[p],Globals.Expand.Value(t,p+1) end  
+		if p==#t then return t[p] end      
+		return nil                                 
+	end, Constant=true },
 	['LUA'] = { Type='table', Value=_G, Constant=true },
 	["TRANSLATION_TARGET"] = {Type="string", Value="Lua", Constant=true},
 	["CHR"] = { Type='delegate', Value=string.char, Constant=true },
@@ -517,7 +524,7 @@ end
 local function ClassNew(class,...)
 end
 
-local function ClassStaticIndex(class,k)
+local function ClassStaticIndex(class,k)	
 	if k==".neilclass" then
 		return true
 	elseif k==".hasmember" then
@@ -526,13 +533,15 @@ local function ClassStaticIndex(class,k)
 			if class.Members[m] then return "Member","Regular" end
 			if class.StaticMembers[m] then return "Member","Static" end
 			if class.GetProperties[m] or class.SetProperties[m] then return "Property","Regular" end
-			if class.StaticGetProperties[m] or class.SetStaticProperties[m] then return "Property","Static" end
-			if class.AbstractGetProperties[m] or class.SetAbstractProperties[m] then return "Property","Abstract" end
+			if class.StaticGetProperties[m] or class.StaticSetProperties[m] then return "Property","Static" end
+			if class.AbstractGetProperties[m] or class.AbstractSetProperties[m] then return "Property","Abstract" end
 			if class.Methods[m] then return "Method","Regular" end
 			if class.StaticMethods[m] then return "Method","Static" end
 			if class.AbstractMethods[m] then return "Method","Abstract" end
 			return nil,nil
 		end
+	else	
+		error("Temp error: "..k)
 	end
 end
 
@@ -554,18 +563,18 @@ _Neil.Class = setmetatable({},{
 local GroupClasses = {}
 function Class.Create(name,private,extend)
 	local ret = {}
-	ret.Class = { Members={}, Methods={}, GetProperties={},SetProperties={}, AbstractMethod={}, AbstracitGetProperties={}, AbstractSetProperties={}, StaticMembers={},StaticMethods={},StaticGetProperties={},StaticSetProperties={} }
+	ret.Class = { Members={}, Methods={}, GetProperties={},SetProperties={}, AbstractMethods={}, AbstractGetProperties={}, AbstractSetProperties={}, StaticMembers={}, StaticMethods={},StaticGetProperties={},StaticSetProperties={} }
 	ret.Type = "class"
 	ret.Constant = true
-	ret.Value = function(...) 
-			return setmetatable({},{
+	ret.Value = --function(...) 
+			--[[return]] setmetatable({},{
 				__call==function(s,...)
 				    return classnew(ret.Class,...)
 				end,
-				__index==function(s,k) return ClassStaticIndex(class,k) end,
-				__newindex=function(s,k,v) return ClassStaticNewIndex(class,k,v) end
+				__index=function(s,k) return ClassStaticIndex(ret.Class,k) end,
+				__newindex=function(s,k,v) return ClassStaticNewIndex(ret.Class,k,v) end
 			})
-		end
+		--end
 	if private then 
 		GroupClasses[name]=ret 
 	else
@@ -575,6 +584,7 @@ function Class.Create(name,private,extend)
 end
 
 local function GetClass(privateclass,classname)
+	assert(classname,"String expected for classname, but a "..type(classname).." was received in stead! "..debug.traceback())
 	if privateclass then
 		cl = GroupClasses[classname]
 	else
@@ -582,16 +592,16 @@ local function GetClass(privateclass,classname)
 	end
 	assert(cl,"No class found name "..classname)
 	assert(cl.Type=="class","Not a class: "..classname)
-	return cl
+	return cl,cl.Value
 end
 
 function Class.NewMember(privateclass,nameclass,membertype,membername,protection,rw,static,value)
-	local cl = GetClass(privateclass,nameclass)
+	local cl,vcl = GetClass(privateclass,nameclass)
 	assert(not cl.Sealed,"Class is already sealed and ready for usage")
-	membername = membername:upper()
-	local t,s = cl[".hasmember"](membername)
-	membertype = mambertype:lower()
-	assert(not t,"There is already a "..t:lower().." ("..s..") named '"..membername.."' present in that class")
+	membername = membername:upper()	
+	local t,s = vcl[".hasmember"](membername)
+	membertype = membertype:lower()
+	if t then error("There is already a "..t:lower().." ("..s..") named '"..membername.."' present in that class") end
 	local nm = { Type = membertype }
 	if rw=="const" then static=true; nm.Constant=true end
 	if rw=="readonly" then nm.ReadOnly=true end
@@ -610,11 +620,16 @@ function Class.NewMember(privateclass,nameclass,membertype,membername,protection
 		nm.value=value
 	end
 	if static then
-		cl.StaticMembers[membername] = nm
+		cl.Class.StaticMembers[membername] = nm
 	else 
-		cl.Members[membername] = nm
+		cl.Class.Members[membername] = nm
 	end
 
+end
+
+function Class.Seal(privateclass,nameclass)
+	local cl = GetClass(privateclass,nameclass)
+	cl.Sealed = true
 end
 
 function _Neil.ClassNew(nameclass)
@@ -627,6 +642,7 @@ function _Neil.ClassNew(nameclass)
 	local ret = setmetatable({},{__index=function(s,k) return ClassIndex(trueobject,s,k) end, __newindex=function(s,k,v) ClassNewIndex(trueobject,s,k,value) end, __gc=function(s) ClassDestructor(trueobject,s) end })
 	return ret
 end
+
 
 
 
@@ -1376,6 +1392,7 @@ local function Translate(chopped,chunk)
 	local allowground
 	local cfor = 0
 	local regions = 0
+
 	function _EndScope()
 		local s,sid = CurrentScope()
 		-- print("__Ending Scope: "..sid.." has locals: "..tostring(s.haslocals))
@@ -1389,6 +1406,102 @@ local function Translate(chopped,chunk)
 		end
 		EndScope()
     end
+
+	function ClassParse(insid,ins,scope)
+		local cl_private = scope.classscope ~= "class"
+		if ins.words[1].lword=="end" then
+			ret = ret .. _Neil.Neil..".Class.Seal("..tostring(cl_private)..", \""..scope.classname.."\")\t"
+			EndScope()
+			if scope.class=="class" then
+			   -- nothing
+			elseif scope.class=="group" then
+			   return "No group seal support yet"
+			elseif scope.class=="module" then
+				return "No module sealing support yet"
+			end
+			ret = ret .. "\tend"
+			return
+		end
+		if not( DeclaHelp(ins.words[1].lword) or IsType(ins.words[1].word) ) then
+			return "Illegal instruction"
+		end
+		local i=1
+		local isglobal,rw = "notset","readwrite"
+		local identifier
+		local initvalue = "nil"
+		local istype
+		local isstatic = false
+		-- local ret = ""
+		local realtype
+		local scopeid = scope.id
+		scope.members = scope.members or {}
+		local members = scope.members; members.get = members.get or {}; members.set = members.set or {}
+		-- localplua = localplua and scope.kind~="script"
+		-- alwaysplua = alwaysplua or localplua
+		-- decladata
+		while not IsType(ins.words[i].lword) do
+			if i>#ins.words then return "Declaration syntax error" end
+			local w = ins.words[i].lword
+			if w=="global" or w=="public" then
+				if isglobal~="notset" then return "Protection level conflict" end
+				isglobal="public"
+			elseif w=="local" or w=="private" then
+				if isglobal~="notset" then return "Protection level conflict" end
+				isglobal="private"
+			elseif w=="static" then
+				-- if isglobal~="notset" then return "Protection level conflict" end
+				-- isglobal="static"			
+				isstatic = true
+			elseif w=="readonly" or w=="const" then
+				if rw~="readwrite" then return "Read-Write setting conflict" end
+				rw=w			
+			elseif IsType(ins.words[i].word) then
+				-- all okay
+			else
+				return "Unexpected '"..ins.words[i].word.."' in declaration"
+			end
+			i = i + 1
+		end
+		-- print("Decladebug:",i,ins.words[i].word)
+		if isglobal=="notset" then isglobal = "local" end
+		istype = ins.words[i].lword
+		if istype=="plua" then
+			return "The 'plua' type is not compatible with classes, group and modules"
+		end
+		-- all complete?
+		if i>=#ins.words then return "Incomplete declaration" end
+		if isglobal=="notset" then isglobal="local" end
+		-- identifier
+		i = i + 1
+		identifier = ins.words[i].word
+		-- verify
+		if keywords[identifier:lower()] then return "Unexpected keyword ("..identifier..") in member declaration" end
+		if members[ins.words[i].uword] then 
+			-- for k,v in pairs(scope.identifiers) do print(k,v) end
+			return "Duplicate member: "..identifier 
+		end
+		-- All clear... let's get this show on the road
+		-- Always Plua
+		realtype = istype 
+
+		-- Class.NewMember(privateclass,nameclass,membertype,membername,protection,rw,static,value)
+		if i>=#ins.words or ins.words[i+1].kind=="comment" then
+		    --                                             priv cname,  memtyp  memnam  prot   rw       static value
+			ret = ret .. string.format("\tClass.NewMember(%s,\"%s\", \"%s\", \"%s\", \"%s\", \"%s\", %s,    nil )",cl_private,scope.classname,istype,identifier,isglobal,rw,isstatic)
+			-- if isstatic and scope.class=="class" then scope.locals[membername] = _Neil.Neil..".Globals."..classname.."."..membername end
+			scope.identifiers[identifier:upper()] = "self."..identifier
+		elseif ins.words[i+1].word == "=" then
+			local value,err = LitTrans(ins,i+2,nil,unknown) -- (ins,pos,endword,unk,unknownprefix)
+			if not value then return err end
+			ret = ret .. string.format("\t".. _Neil.Neil..".Class.NewMember(%s,\"%s\", \"%s\", \"%s\", \"%s\", \"%s\", %s,    %s )",cl_private,scope.classname,istype,identifier,isglobal,rw,isstatic,value)
+			scope.identifiers[identifier:upper()] = "self."..identifier
+	    elseif ins.words[i+1].word ==" (" then
+		    error("Method parsing not yet supported")
+		end
+		-- error("Can't get on the move yet\n"..Serialize("class_ins["..insid.."]",ins).."\n\n"..ret)
+	end
+	-- </ CLASS PARSE >
+
 	for insid,ins in ipairs(chopped.instructions) do
 		if cline ~= ins.linenumber then ret = ret .."\n--[["..(ins.linenumber or "<??>").."]]\t"; cline=ins.linenumber end
 		--print(_Neil.Globals.Serialize("ins",ins))
@@ -1396,11 +1509,6 @@ local function Translate(chopped,chunk)
 		   ret = ret .. "-- comment received --"
 		elseif ins.kind=="whiteline" then
 		   ret = ret .."-- whiteline received --"
-		elseif DeclaHelp(ins.words[1].lword) or IsType(ins.words[1].word) then
-			local success,err = Declaration(ins,scope,alwaysplua,pluaprefix,localplua)
-			if not success then return nil,err.." in line "..ins.linenumber.." ("..chunk..")" end
-			scope,scopeid = CurrentScope() -- Since functions can be define here, this is important!
-			ret = ret .. success
         elseif ins["kind"] == "preprocessor directive" then
 			local dir = ins.words[2].lword -- word 1 is always # after all!
 			ret = ret .. "-- directive: #"..dir
@@ -1433,6 +1541,39 @@ local function Translate(chopped,chunk)
 			else
 			       return nil,"Unknown directive #"..ins.words[2].word.." in line #"..ins.linenumber.." ("..chunk..")" 
 			end
+        elseif scope.classscope then -- must after the preprocessor directives be first!!!
+			local e = ClassParse(insid,ins,scope)
+			if e then return nil,e.." in line #"..ins.linenumber.." ("..chunk..")" end
+			scope,scopeid = CurrentScope()
+		elseif ins.words[1].lword == "class" then
+			if scope.type~="script" then
+				return nil,"Classes cannot be created in subscopes ("..chunk..":"..ins.linenumber..")"
+			elseif #ins.words<2 then
+				return nil,"Incomplete class definition ("..chunk..":"..ins.linenumber..")"
+			elseif ins.words[2].kind~="identifier" then
+				return nil,"Identifier expected ("..chunk..":"..ins.linenumber..")"
+			end
+			local classname = ins.words[2].uword
+			local script
+			if Globals[classname] then
+				return nil,"Duplicate global identifier ("..chunk..":"..ins.linenumber..")"
+			end
+			local extend
+			script,scope,scopeid = NewScope("","class")
+			scope.classscope = "class"
+			scope.classname = classname
+			scope.with = _Neil.Neil..".Globals."..classname
+			ret = ret .."do "..script.."\t --[[ Class: "..classname.."]]\t" -- Security measure to create a 'do' scope... Overall it never hurts, and some 'damage' can be prevented on the way.
+			if extend then
+				ret = ret .. _Neil.Neil..".Class.Create(\""..classname.."\", false, \""..extend.."\")" -- name,private,extend
+			else
+				ret = ret .. _Neil.Neil..".Class.Create(\""..classname.."\", false)" -- name,private,extend
+			end
+		elseif DeclaHelp(ins.words[1].lword) or IsType(ins.words[1].word) then
+			local success,err = Declaration(ins,scope,alwaysplua,pluaprefix,localplua)
+			if not success then return nil,err.." in line "..ins.linenumber.." ("..chunk..")" end
+			scope,scopeid = CurrentScope() -- Since functions can be define here, this is important!
+			ret = ret .. success
 		elseif ins.words[1].lword=="if" or ins.words[1].lword=="while" then
 			if (not allowground) and scope.type=="script" then return nil,ins.words[1].word.." statement not allowed in ground scope" end
 			local trans,err = NewConditionScope(ins.words[1].lword,ins,unknowns)
