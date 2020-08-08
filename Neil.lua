@@ -67,7 +67,7 @@ local keywords = { "void","int","byte","number","bool","boolean","delegate","fun
 
 }
 
-local declasupport = {"global","public","private","final","abstract", "get", "set", "local","static","const" }
+local declasupport = {"global","public","private","final","abstract", "get", "set", "local","static","const", "readonly" }
 local types = {"void","int","string","bool","boolean","delegate","function","userdata","number","table"}
 
 local UsedByNeil = {}
@@ -541,12 +541,15 @@ end
 local function ClassStaticConstructorCall(class)
 	-- print("start") for k,v in pairs(class) do print( "Class has "..type(v).." "..k ) end print("end")
 	if class.StaticConstructor and (not class.StaticConstructorRun) then 
-		class.StaticConstructor.Value() class.
 		StaticConstructorRun=true 
+		class.AllowReadOnly = true
+		class.StaticConstructor.Value() 
+		class.AllowReadOnly = false
 	end
 end
+
 local function ClassStaticIndex(class,actclass,k)	
-	ClassStaticConstructorCall()
+	ClassStaticConstructorCall(class)
 	if k==".neilclass" then
 		return true
 	elseif k==".hasmember" then
@@ -585,7 +588,7 @@ local function ClassStaticIndex(class,actclass,k)
 end
 
 local function ClassStaticNewIndex(class,actclass,k,v)
-	ClassStaticConstructorCall()
+	ClassStaticConstructorCall(class)
 	if false then -- reserved section for system defintions inside the class
 	else
 		local uk = k:upper(0)
@@ -1814,6 +1817,7 @@ local function Translate(chopped,chunk)
 			if scope.type~="script" then return nil,"init only allowed in ground scope" end
 			ret = ret .. " __neil_init_functions[#__neil_init_functions+1] = function()"
 			script,scope,scopeid = NewScope("","init")
+			scope.startline = ins.linenumber
 			-- scope,scopeid = CurrentScope();		
 			ret = ret .. script
 		elseif ins.words[1].lword=="end" then
@@ -1913,7 +1917,13 @@ local function Translate(chopped,chunk)
 			error("I do not yet understand instruction "..insid.." in line "..ins.linenumber.." of chunk "..chunk..".\n I'm still being developed after all")
 		end
 	end
-	if scope.type~="script" then return nil,scope.type.." not properly ended" end
+	if scope.type~="script" then 
+		if scope.startline then
+			return "The "..scope.type.." scope in line "..scope.startline.." has not been properly ended"
+		else
+			return nil,scope.type.." not properly ended" 
+		end
+	end
 	_EndScope() -- Script scope must end too, you know!
 	ret = ret .."\n\n--[[ Closure ]] for _,initfunc in ipairs(__neil_init_functions) do initfunc() end; __neil_init_functions = nil"
 	 print("<translation>\n","\r"..ret.."\n</translation>") -- debug
