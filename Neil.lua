@@ -47,7 +47,7 @@ local TranslationCount = 0
 
 -- keywords and operators
 local operators = {"++","--","!=" --[[Neil will replace != with ~=]],"~=","::=","+=","-=","==","<=",">=","//","||","&&" --[[ Maybe // is a bit odd to call an operator, but for Neil that's the easier way to work]], "/*", "*/",
-                    "+", "-", "=", ">",  "<", "!" --[[Neil will replace ! with 'not']] , "%","#","*","/","^",",","/","[","]","&"}
+                    "+", "-", "=", ">",  "<", "!" --[[Neil will replace ! with 'not']] , "%","#","*","/","^",",","/","[","]","&","{","}"}
 local keywords = { "void","int","byte","number","bool","boolean","delegate","function","plua", "userdata", -- types
                    "switch","case","default", "fallthrough", -- casing (fallthrough is reserved... it would require to translate with 'goto', but that would require Lua 5.2 or later)
 				   "repeat","until","forever","loopwhile", -- basic looping
@@ -58,7 +58,7 @@ local keywords = { "void","int","byte","number","bool","boolean","delegate","fun
 				   "ipairs","pairs","in",
 				   "cfor", -- reserved. Idea for c-syntax for like this "for (i=1;i<=10;i++)".  But not planned for short term
 				   "global","public","private","final","abstract", "get", "set", "local", -- needed for declarations
-				   "class","module","group","quickmeta",
+				   "class","module","group","quickmeta","new",
 				   "mod", -- Neil will replace that with % -- Just a nice thing for BASIC and Pascal coders
 				   "return", -- We need that one, don't we?
 				   "true", "false", -- The two boolean values
@@ -202,7 +202,7 @@ Globals = {
 	['TOSTRING'] = {Type='delegate', Constant=true,Value=function(v) return ConvType(v,"string") end },
 	["REPLACE"] = {Type='delegate', Constant=true,Value=string.gsub },
 	["RIPAIRS"] = {type="delegate", Constant=true, Value=function(tab)
-	    assert(type(tab)=="tables","RIPairs requires a table. Got "..type(tab))
+	    assert(type(tab)=="table","RIPairs requires a table. Got "..type(tab))
 		local i = #tab + 1
 		return function ()
 		      i = i - 1
@@ -534,17 +534,9 @@ function _Neil.Subtract(value,modvalue) -- Using "-=" will translate to this fun
 end
 
 -- Classes Usage
-local function ClassIndex(trueobject,self,key)
-end
-
-local function ClassNewIndex(trueobject,self,key,value)
-end
-
+local ClassIndex,ClassNewIndex
 
 local function ClassDestructor(class,key)
-end
-
-local function ClassNew(class,...)
 end
 
 local function ClassStaticConstructorCall(class,actclass)
@@ -556,6 +548,44 @@ local function ClassStaticConstructorCall(class,actclass)
 		class.AllowReadOnly = false
 	end
 end
+
+local function ClassNew(class,actclass,...)
+	  ClassStaticConstructorCall(class,actclass)	  
+	  for k,v in pairs(class.AbstractGetProperties) do error("Abstract get-property ("..k..") found in class!") end
+	  for k,v in pairs(class.AbstractSetProperties) do error("Abstract set-property ("..k..") found in class!") end
+	  for k,v in pairs(class.AbstractMethods)       do error("Abstract method ("..k..") found in class!") end
+	  local obj,trueobject
+	  -- print("FUCK",obj,trueobject)
+	  trueobject = {}
+	  for k,odata in pairs({class.Members, class.GetProperties, class.SetProperties, class.Methods }) do 
+	      -- trueobject[k] = {}
+		  for k2,v2 in pairs(odata) do 
+		    trueobject[k2]={}
+			for k3,v3 in pairs(v2) do
+				-- print("Copy: ",k,k2,k3,v3)
+				trueobject[k2][k3]=v3
+			end
+		  end
+	  end
+	  trueobject.destructor = class.Destructor
+	  trueobject.class=class
+	  trueobject.actclass=actclass
+	  obj = setmetatable({},{
+	  	  __index = function(s,k) return ClassIndex(trueobject,obj,k:upper()) end,
+		  __newindex = function(s,k,v) return ClassNewIndex(trueobject,obj,k:upper(),v) end,
+		  __call = function(s,...) if class.Methods.ONCALL then return class.Methods.ONCALL.Value(obj,...) else error("Class has no \"OnCall\" method") end end,
+		  __len = function(s,...) if class.Methods.ONLEN then return class.Methods.ONLEN.Value(obj,...) else error("Class has no \"OnLen\" method") end end,
+		  __gc = function(s,...) if trueobject.destructor then trueobject.destructor.Value(obj) end end
+	  })
+	  if trueobject.class.Constructor then
+	     trueobject.AllowReadOnly = true
+		 trueobject.class.Constructor.Value(obj,...)
+         trueobject.AllowReadOnly = false
+	end
+	return obj
+end
+
+
 
 local function ClassStaticIndex(class,actclass,k)	
 	ClassStaticConstructorCall(class,actclass)
@@ -578,7 +608,7 @@ local function ClassStaticIndex(class,actclass,k)
 		error("Command field unknown: "..k)
 	else
 		local uk = k:upper(0)
-		if class.Members[uk] or class.GetProperties[uk] or class.Methods[uk] then error("Member "..k.." is not static") end
+		if class.Members[uk] or class.GetProperties[uk] or class.Methods[uk] then error("Member "..k.." is not static\n\n"..debug.traceback()) end
 		if class.StaticMembers[uk] then return class.StaticMembers[uk].Value end
 		if class.StaticMethods[uk] then 
 			-- for k,v in pairs(class.StaticMethods[uk]) do print(type(v),k) end
@@ -619,6 +649,55 @@ local function ClassStaticNewIndex(class,actclass,k,v)
 	end
 end
 
+function ClassIndex(trueobject,self,k)
+  if k:lower()==".neilclass" then
+		return true
+  elseif k:lower()==".neilclassobject" then
+	    return true
+  elseif k:lower()==".fromclass" then
+	    return trueobject.class
+  elseif Globals.PREFIXED.Value(k,".") then
+	    error("No system property known for "..k)
+  end
+  local what,ctype = ClassStaticIndex(trueobject.class,trueobject.actclass,".hasmember")(k) -- trueobject.class[".hasmember"](key) 
+  assert(what,"Object has no member named "..k)
+  if ctype=="Static" then
+	return trueobject.actclass.Value[k]
+  end
+  local uk = k:upper()
+  if trueobject.class.Members[uk] then return trueobject[uk].Value end
+  if trueobject.class.Methods[uk] then return function(...) return trueobject.class.Methods[uk].Value(self,...) end end
+  if trueobject.class.GetProperties[uk] then return trueobject.class.GetProperties[uk].Value(self) end
+  if trueobject.class.SetProperties[uk] then error("Property "..k.." appears to be write-only") end
+  error("No member named '"..k.."' present") -- Should never happen, but just in case!
+end
+
+function ClassNewIndex(trueobject,self,key,value)
+	local lk,uk = key:lower(),key:upper()
+	if false then -- reserved for system functionality later
+	elseif Globals.PREFIXED.Value(key,".") then
+	    error("No system property known for "..key)
+	end
+	local what,ctype = trueobject.actclass.Value[".hasmember"](key) 
+	assert(what,"Object has no member named "..key)
+	if ctype=="Static" then
+	   trueobject.actclass.Value[key] = value
+	   return
+	end
+  if trueobject.class.Members[uk] then 
+	 if trueobject.class.Members[uk].Constant then error("Constants cannot be overwritten") end -- should be impossible, as constants are ALWAYS static, but when some clever whizkids break in, this measure is at least taken!
+	 if trueobject.class.Members[uk].ReadOnly and (not trueobject.AllowReadOnly) then error("You cannot overwrite read-only values") end
+	 -- for k,v in pairs(trueobject) do print("uk = "..uk,"key = "..k,type(v),value) end
+	 trueobject[uk].Value = value
+	 return
+  end
+  if trueobject.class.Methods[uk] then error("Methods cannot be overwritten") end
+  if trueobject.class.SetProperties[uk] then return trueobject.class.SetProperties[uk].Value(self,value) end
+  if trueobject.class.GetProperties[uk] then error("Property "..k.." appears to be read-only") end
+  error("No member named '"..key.."' present") -- Should never happen, but just in case!
+end
+
+
 -- Classes Creation
 local Class = {}
 _Neil.Class = setmetatable({},{
@@ -637,15 +716,13 @@ function Class.Create(name,private,extend)
 	ret.Class = { Members={}, Methods={}, GetProperties={},SetProperties={}, AbstractMethods={}, AbstractGetProperties={}, AbstractSetProperties={}, StaticMembers={}, StaticMethods={},StaticGetProperties={},StaticSetProperties={} }
 	ret.Type = "class"
 	ret.Constant = true
-	ret.Value = --function(...) 
-			--[[return]] setmetatable({},{
-				__call==function(s,...)
-				    return classnew(ret.Class,...)
+	ret.Value = setmetatable({},{
+				__call=function(s,...)					
+				    return ClassNew(ret.Class,ret,...)
 				end,
 				__index=function(s,k) return ClassStaticIndex(ret.Class,ret,k) end,
 				__newindex=function(s,k,v) return ClassStaticNewIndex(ret.Class,ret,k,v) end
-			})
-		--end
+			})		
 	if private then 
 		GroupClasses[name]=ret 
 	else
@@ -759,7 +836,8 @@ function Class.Seal(privateclass,nameclass)
 	cl.Sealed = true
 end
 
-function _Neil.ClassNew(nameclass)
+--[[
+function _Neil.Class!New(nameclass)
 	-- Does this class exist?
 	local ucln = nameclass:upper(); if not _Neil.Assert(Globals[ucln],"No Neil Identifier known as "..nameclass) then return end
 	local clss = Globals[ucln]
@@ -769,6 +847,7 @@ function _Neil.ClassNew(nameclass)
 	local ret = setmetatable({},{__index=function(s,k) return ClassIndex(trueobject,s,k) end, __newindex=function(s,k,v) ClassNewIndex(trueobject,s,k,value) end, __gc=function(s) ClassDestructor(trueobject,s) end })
 	return ret
 end
+]]
 
 
 
@@ -1085,7 +1164,7 @@ local function Chop(script,chunk)
 				cword().word="$"
 				cword().kind="with-mark"
 			end
-		elseif char=="!" or char=="%" or char=="#" or char=="^" or char=="*" or char=="(" or char==")" or char=="-" or char=="|" or char=="&" or char=="=" or char=="+" or char=="," or char=="/" or char==">" or char=="<" or char=="[" or char=="]" then
+		elseif char=="!" or char=="%" or char=="#" or char=="^" or char=="*" or char=="(" or char==")" or char=="-" or char=="|" or char=="&" or char=="=" or char=="+" or char=="," or char=="/" or char==">" or char=="<" or char=="[" or char=="]" or char=="{" or char=="}" then
 			if cword().kind~="operator" and cword().word~="" then newword() end
 			if cword().word~="" then
 				-- print(lastchar,char)
@@ -1217,6 +1296,7 @@ end
 local function LitTrans(ins,pos,endword,unk,unknownprefix)
 	local fendword
 	local ret = ""
+	local TriggerNew = 0
 	for i=pos,#ins.words do
 		local word = ins.words[i]
 		if endword==word.lword then fendword = true break end
@@ -1228,6 +1308,8 @@ local function LitTrans(ins,pos,endword,unk,unknownprefix)
 		   else
 		      ret = ret .. " "..word.word.." "
 		   end
+		elseif word.lword == "new" then
+			TriggerNew = 2
         elseif word.kind == "keyword" then
 		   if word.lword == "not" or word.lword=="nil" or word.lword=="and" or word.lword=="or" or word.lword=="true" or word.lword=="false" or word.lword == "ipairs" or word.lword == "pairs" then
 		      ret = ret .. " "..word.lword.." "
@@ -1253,6 +1335,7 @@ local function LitTrans(ins,pos,endword,unk,unknownprefix)
 		else
 		   return nil,"Unexpected "..word.kind.." ("..word.word..") "
 		end
+		if TriggerNew>0 then TiggerNew = TriggerNew - 1 end
 	end
 	return ret,"Ok",fendword
 	-- return nil,"LitTrans not yet completed (WIP issue)"
@@ -1572,7 +1655,7 @@ local function Translate(chopped,chunk)
 			ret = ret .. "\tend"
 			return
 		end
-		if not( DeclaHelp(ins.words[1].lword) or IsType(ins.words[1].word) ) then
+		if not( DeclaHelp(ins.words[1].lword) or IsType(ins.words[1].word) or ins.words[1].word=="constructor" or ins.words[1].word=="destructor") then
 			return "Illegal instruction"
 		end
 		local i=1
@@ -1683,11 +1766,12 @@ local function Translate(chopped,chunk)
 			nscope.identifiers.SELF = "self"
 			nscope.closure = ")"
 			ret = ret .. string.format("\t".. _Neil.Neil..".Class.NewProperty(%s,\"%s\", \"%s\", \"%s\", \"%s\", \"%s\", %s,\"%s\",    %s ",cl_private,scope.classname,istype,identifier,isglobal,rw,isstatic,property,func).."\t"..nscopescript
+			scope.identifiers[identifier:upper()] = "self."..identifier
 			-- error("Property defintion still WIP")
 		elseif i>=#ins.words or ins.words[i+1].kind=="comment" then
 			if istype=="void" then return "Void type only allowed for functions and methods" end
 		    --                                             priv cname,  memtyp  memnam  prot   rw       static value
-			ret = ret .. string.format("\tClass.NewMember(%s,\"%s\", \"%s\", \"%s\", \"%s\", \"%s\", %s,    nil )",cl_private,scope.classname,istype,identifier,isglobal,rw,isstatic)
+			ret = ret .. string.format("\t".._Neil.Neil..".Class.NewMember(%s,\"%s\", \"%s\", \"%s\", \"%s\", \"%s\", %s,    nil )",cl_private,scope.classname,istype,identifier,isglobal,rw,isstatic)
 			-- if isstatic and scope.class=="class" then scope.locals[membername] = _Neil.Neil..".Globals."..classname.."."..membername end
 			scope.identifiers[identifier:upper()] = "self."..identifier
 		elseif ins.words[i+1].word == "=" then
@@ -1697,6 +1781,7 @@ local function Translate(chopped,chunk)
 			ret = ret .. string.format("\t".. _Neil.Neil..".Class.NewMember(%s,\"%s\", \"%s\", \"%s\", \"%s\", \"%s\", %s,    %s )",cl_private,scope.classname,istype,identifier,isglobal,rw,isstatic,value)
 			scope.identifiers[identifier:upper()] = "self."..identifier
 	    elseif ins.words[i+1].word =="(" then
+			scope.identifiers[identifier:upper()] = "self."..identifier
 			local func,error = DefineFunction(ins,i+2,istype,false,false,true)
 			if not func then return error end
 			ret = ret .. string.format("\t".. _Neil.Neil..".Class.NewMethod(%s,\"%s\", \"%s\", \"%s\", \"%s\", \"%s\", %s,    %s ",cl_private,scope.classname,istype,identifier,isglobal,rw,isstatic,func)
