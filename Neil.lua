@@ -201,6 +201,15 @@ Globals = {
 	['CONVTYPE'] = {Type='delegate', Constent=true, Value=ConvType },
 	['TOSTRING'] = {Type='delegate', Constant=true,Value=function(v) return ConvType(v,"string") end },
 	["REPLACE"] = {Type='delegate', Constant=true,Value=string.gsub },
+	["RIPAIRS"] = {type="delegate", Constant=true, Value=function(tab)
+	    assert(type(tab)=="tables","RIPairs requires a table. Got "..type(tab))
+		local i = #tab + 1
+		return function ()
+		      i = i - 1
+		      if i<=0 then return nil,nil end
+			  return i,tab[i]
+		end 
+	end},
 	['TRIM'] = {Type='delegate', Constant=true,Value=function(str) return (Neil.Globals.ToString(str):gsub("^%s*(.-)%s*$", "%1")) end },
 	['LEFT'] = {Type='delegate', Constant=true, Value=function(s, l) 
 			if not _Neil.Assert(type(s)=="string","String exected as first argument for 'left'") then return end
@@ -1823,6 +1832,7 @@ local function Translate(chopped,chunk)
 			-- scope,scopeid = CurrentScope();		
 			ret = ret .. script
 		elseif ins.words[1].lword=="end" then
+			-- print("End of scope: "..scopeid.." >> "..scope.type.." "..ins.linenumber) -- debug
 			if suffixed(scope.type,"function") or suffixed(scope.type,"method") then
 				if scope.returntype~="void" and (not scope.returned) then
 					ret = ret .. "return ".._Neil.Neil..".Globals.ConvType(nil,'"..scope.returntype.."','auto-return value',false)\t"
@@ -1921,7 +1931,7 @@ local function Translate(chopped,chunk)
 	end
 	if scope.type~="script" then 
 		if scope.startline then
-			return "The "..scope.type.." scope in line "..scope.startline.." has not been properly ended"
+			return nil,"The "..scope.type.." scope in line "..scope.startline.." has not been properly ended  ("..chunk..")"
 		else
 			return nil,scope.type.." not properly ended" 
 		end
@@ -1937,7 +1947,7 @@ function _Neil.Translate(script,chunk)
 	-- print("Ori\n",script,"/Ori")
 	local macroed,macroerror = Macro(script,chunk); if not macroed then _Neil.Error("Macro error: "..macroerror) return nil,"Macro error: "..macroerror end
 	-- print(macroed) error("Crash!") -- debug
-	local chopped = Chop(macroed)
+	local chopped = Chop(macroed.."\n\n")
 	-- print(Serialize("chopped",chopped))
 	-- return nil,"Sorry translate does not yet work!"
 	local ret,error = Translate(chopped,chunk)
