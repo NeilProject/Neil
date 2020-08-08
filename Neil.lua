@@ -1070,7 +1070,7 @@ local function Chop(script,chunk)
 		end
 		if oldword.kind=="operator" then
 			if oldword.word == "!"  then oldword.word="not" oldword.kind="keyword" end
-			if oldword.word == "&"  then oldword.word=".."  oldword.kind="operator" end
+			-- if oldword.word == "&"  then oldword.word=".."  oldword.kind="operator" end -- This was only a temporary solution
 			if oldword.word == "&&" then oldword.word="and" oldword.kind="keyword" end
 			if oldword.word == "||" then oldword.word="or"  oldword.kind="keyword" end
 		elseif oldword.kind=="keyword" then
@@ -1151,7 +1151,14 @@ local function Chop(script,chunk)
 			if lchar=="x" then hexnum=true end
 		elseif char=="." then
 			newword()
-			cword().kind="member"
+			if i<#script and mid(script,i+1,1)=="." then
+				cword().kind="operator"
+				cword().word = ".."
+				newword()
+			elseif i>1 and mid(script,i-1,1)=="." then
+			else
+				cword().kind="member"
+			end
 		elseif char==":" then
 			newword()
 		    cword().kind="method"
