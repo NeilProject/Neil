@@ -538,18 +538,18 @@ end
 local function ClassNew(class,...)
 end
 
-local function ClassStaticConstructorCall(class)
+local function ClassStaticConstructorCall(class,actclass)
 	-- print("start") for k,v in pairs(class) do print( "Class has "..type(v).." "..k ) end print("end")
 	if class.StaticConstructor and (not class.StaticConstructorRun) then 
-		StaticConstructorRun=true 
+		class.StaticConstructorRun=true 
 		class.AllowReadOnly = true
-		class.StaticConstructor.Value() 
+		class.StaticConstructor.Value(actclass.Value) 
 		class.AllowReadOnly = false
 	end
 end
 
 local function ClassStaticIndex(class,actclass,k)	
-	ClassStaticConstructorCall(class)
+	ClassStaticConstructorCall(class,actclass)
 	if k==".neilclass" then
 		return true
 	elseif k==".hasmember" then
@@ -582,13 +582,13 @@ local function ClassStaticIndex(class,actclass,k)
 			return class.StaticGetProperties[uk].Value(actclass.Value)  
 		end
 		if class.StaticSetProperties[uk] then error("Property '"..k.."' is only configured for writing\n"..debug.traceback()) end -- Safe... The SET has already been acted upon if it exists, and this function was exited!
-
-		error("Temp Static index error: "..k.." code not yet fully up to date to deal with this request! That's WIP for ya!")
+		error("No static member named '"..k.."' present")
+		-- error("Temp Static index error: "..k.." code not yet fully up to date to deal with this request! That's WIP for ya!")
 	end
 end
 
 local function ClassStaticNewIndex(class,actclass,k,v)
-	ClassStaticConstructorCall(class)
+	ClassStaticConstructorCall(class,actclass)
 	if false then -- reserved section for system defintions inside the class
 	else
 		local uk = k:upper(0)
@@ -648,7 +648,7 @@ end
 
 local function GetClass(privateclass,classname)
 	assert(classname,"String expected for classname, but a "..type(classname).." was received in stead! "..debug.traceback())
-	if privateclass then
+	if privateclass then		
 		cl = GroupClasses[classname]
 	else
 		cl = Globals[classname:upper()]
@@ -1549,7 +1549,7 @@ local function Translate(chopped,chunk)
 
 	local mkConstructor
 	function ClassParse(insid,ins,scope)
-		local cl_private = scope.classscope ~= "class"
+		local cl_private = scope.classscope ~= "class" and scope.classscope ~= "group"
 		if ins.words[1].lword=="end" then
 			ret = ret .. _Neil.Neil..".Class.Seal("..tostring(cl_private)..", \""..scope.classname.."\")\t"
 			EndScope()
@@ -1595,12 +1595,14 @@ local function Translate(chopped,chunk)
 				s.closure=")"
 				s.returntype="void"
 			else
-				local script,s,sid = NewScope("function()",dtype.."-function")
+				local script,s,sid = NewScope("function(self)",dtype.."-function")
 				ret = ret .. string.format("\t".. _Neil.Neil..".Class.NewMethod(%s,\"%s\", \"%s\", \"%s\", \"%s\", \"%s\", %s,    %s ",cl_private,scope.classname,istype,dtype,isglobal,rw,isstatic,script)
 				s.closure=")"
 				s.returntype="void"
 			end
 		end
+
+		if scope.classscope=="group" then isstatic=true end
 
 		-- localplua = localplua and scope.kind~="script"
 		-- alwaysplua = alwaysplua or localplua
@@ -1739,9 +1741,9 @@ local function Translate(chopped,chunk)
 			local e = ClassParse(insid,ins,scope)
 			if e then return nil,e.." in line #"..ins.linenumber.." ("..chunk..")" end
 			scope,scopeid = CurrentScope()
-		elseif ins.words[1].lword == "class" then
+		elseif ins.words[1].lword == "class" or ins.words[1].lword == "group" then
 			if scope.type~="script" then
-				return nil,"Classes cannot be created in subscopes ("..chunk..":"..ins.linenumber..")"
+				return nil,"Classes and groups cannot be created in subscopes ("..chunk..":"..ins.linenumber..")"
 			elseif #ins.words<2 then
 				return nil,"Incomplete class definition ("..chunk..":"..ins.linenumber..")"
 			elseif ins.words[2].kind~="identifier" then
@@ -1754,8 +1756,8 @@ local function Translate(chopped,chunk)
 			end
 			Globals[classname] = "PLACEHOLDER"
 			local extend
-			script,scope,scopeid = NewScope("","class")
-			scope.classscope = "class"
+			script,scope,scopeid = NewScope("", ins.words[1].lword)
+			scope.classscope =  ins.words[1].lword 
 			scope.classname = classname
 			scope.with = _Neil.Neil..".Globals."..classname
 			ret = ret .."do "..script.."\t --[[ Class: "..classname.."]]\t" -- Security measure to create a 'do' scope... Overall it never hurts, and some 'damage' can be prevented on the way.
