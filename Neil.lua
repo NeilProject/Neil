@@ -538,10 +538,15 @@ end
 local function ClassNew(class,...)
 end
 
-local function ClassStaticIndex(class,actclass,k)	
+local function ClassStaticConstructorCall(class)
 	-- print("start") for k,v in pairs(class) do print( "Class has "..type(v).." "..k ) end print("end")
-	if class.StaticConstructor and (not class.StaticConstructorRun) then class.StaticConstructor.Value() class.StaticConstructorRun=true end
-
+	if class.StaticConstructor and (not class.StaticConstructorRun) then 
+		class.StaticConstructor.Value() class.
+		StaticConstructorRun=true 
+	end
+end
+local function ClassStaticIndex(class,actclass,k)	
+	ClassStaticConstructorCall()
 	if k==".neilclass" then
 		return true
 	elseif k==".hasmember" then
@@ -580,7 +585,7 @@ local function ClassStaticIndex(class,actclass,k)
 end
 
 local function ClassStaticNewIndex(class,actclass,k,v)
-	if class.StaticConstructor and (not class.StaticConstructorRun) then class.StaticConstructor.Value() class.StaticConstructorRun=true end	
+	ClassStaticConstructorCall()
 	if false then -- reserved section for system defintions inside the class
 	else
 		local uk = k:upper(0)
