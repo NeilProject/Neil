@@ -63,7 +63,7 @@ local keywords = { "void","int","byte","number","bool","boolean","delegate","fun
 				   "return", -- We need that one, don't we?
 				   "true", "false", -- The two boolean values
 				   "nil", "null", -- "null" will be replaced by "nil"
-				   "init",
+				   "init","defer"
 
 }
 
@@ -172,9 +172,9 @@ local substr = string.sub
 local Globals
 Globals = {
     ['EXPAND'] = {Type='delegate', Value=function (t,p)
-		assert(type(t)=="table")
+		assert(type(t)=="table","Table expected in Expand request (got "..type(t)..")\n"..debug.traceback())
 		p = tonumber(p) or 1                                 
-		if p<#t then return t[p],Globals.Expand.Value(t,p+1) end  
+		if p<#t then return t[p],Globals.EXPAND.Value(t,p+1) end  
 		if p==#t then return t[p] end      
 		return nil                                 
 	end, Constant=true },
@@ -1241,6 +1241,7 @@ local function NewScope(script,scopetype)
 	if scopetype~="declaration" and scopetype~="class" and scopetype~="group" and scopetype~="quickmeta" then
 		script = script .. string.format(" local %s_locals = %s.CreateLocals(); _HW%s]]",id,_Neil.Neil,id)
 	end
+	if Globals.SUFFIXED.Value(scopetype,"function") or scopetype=="init" then script = string.format("%s\tlocal %s_defer;",script,id) end
 	return script,scopes[#scopes],id
 end
 
@@ -1646,6 +1647,19 @@ local function Translate(chopped,chunk)
 		EndScope()
     end
 
+	local function UnDefer()
+		local i = #scopes
+		while (not Globals.SUFFIXED.Value(scopes[i].type,"function")) and scopes[i].type~="init" do 		
+			print(scopes[i].type)
+			if i<=0 or scopes[i].type=="script" then return nil,"Internal error: Can't undefer here" end
+			i = i - 1 
+		end
+		if not scopes[i].defer then return "--[[ No undefer in scope "..scopes[i].id.."]]\t" end
+		local deferid = string.format("%s_defer",scopes[i].id)
+		return  "if "..deferid.." then for i=#"..deferid..",1,-1 do "..deferid.."[i].func(".._Neil.Neil..".Globals.Expand( "..deferid.."[i].param ) ) end end\t" 
+	end
+
+
 	local mkConstructor
 	function ClassParse(insid,ins,scope)
 		local cl_private = scope.classscope ~= "class" and scope.classscope ~= "group"
@@ -1677,6 +1691,7 @@ local function Translate(chopped,chunk)
 		local scopeid = scope.id
 		scope.members = scope.members or {}
 		local members = scope.members; members.get = members.get or {}; members.set = members.set or {}
+
 
 		function mkConstructor(dtype)
 			assert(dtype,"Internal error: mkConstructor(nil)")
@@ -1872,6 +1887,28 @@ local function Translate(chopped,chunk)
 			if not success then return nil,err.." in line "..ins.linenumber.." ("..chunk..")" end
 			scope,scopeid = CurrentScope() -- Since functions can be define here, this is important!
 			ret = ret .. success
+		elseif ins.words[1].lword == "defer" then
+			local para,err
+			if #ins.words<2 then return nil,"Incomplete defer ("..chunk..":"..ins.linenumber..")" end
+			if ins.words[2].kind~="identifier" then return nil,"Unexpected "..ins.words[2].kind.." ("..ins.words[2].word..") in defer ("..chunk..":"..ins.linenumber..")" end
+			if #ins.words>2 then
+				if ins.words[3].word~="(" then return nil,"Invalid defer request ("..ins.words[2].word..") in defer ("..chunk..":"..ins.linenumber..")" end
+				para,err = LitTrans(ins,4,nil,unknowns)				
+				if ins.words[#ins.words].word~=")" then return nil,"Invalid defer request closure ("..ins.words[2].word..") in defer ("..chunk..":"..ins.linenumber..")" end
+				para = Globals.TRIM.Value(para)
+				para = Globals.LEFT.Value(para,#para-1)
+			else
+				para = ""
+			end
+			local deferid
+			local i = #scopes 
+			while (not Globals.SUFFIXED.Value(scopes[i].type,"function")) and scopes[i].type~="init" do 				
+				if i<=0 or scopes[i].type=="script" then return nil,"Can't defer here ("..ins.words[2].word..") in defer ("..chunk..":"..ins.linenumber..")" end
+				i = i - 1 
+			end
+			deferid = string.format("%s_defer",scopes[i].id)
+			scopes[i].defer = true
+			ret = ret .. deferid .. " = " .. deferid .. " or {};  "..deferid.."[#"..deferid.."+1] = { func="..GetIdentifier(ins.words[2].word)..", param={"..para.."} }"
 		elseif ins.words[1].lword=="if" or ins.words[1].lword=="while" then
 			if (not allowground) and scope.type=="script" then return nil,ins.words[1].word.." statement not allowed in ground scope" end
 			local trans,err = NewConditionScope(ins.words[1].lword,ins,unknowns)
@@ -1900,16 +1937,18 @@ local function Translate(chopped,chunk)
 			scope,scopeid = CurrentScope()
 		elseif ins.words[1].lword=="return" then
 		    local ftype = GetFunctionType()
+			local ud,err = UnDefer()
+			if ud then return nil,err .. "in line "..ins.linenumber.." ("..chunk..")" end
 			if ftype=="void" then
 				if #ins.words>2 then
 				   if ins.words[2].kind~="comment" then return nil,"Void functions may not return any value" end
 				end
-				ret = ret .. "return;"
+				ret = ret .. ud.."\treturn;"
 				scope.returned = true
 			elseif ftype=="plua" or ftype=="var" then
 				local expression,error = LitTrans(ins,2,nil,unknowns)
 				if not expression then return nil,error.." in line "..ins.linenumber.." ("..chunk..")" end
-				ret = ret .. "return "..expression
+				ret = ret .. ud .."\treturn "..expression
 			else
 				local expression,error = LitTrans(ins,2,nil,unknowns)
 				if not expression then return nil,error.." in line "..ins.linenumber.." ("..chunk..")" end
@@ -1920,12 +1959,18 @@ local function Translate(chopped,chunk)
 			if scope.type~="script" then return nil,"init only allowed in ground scope" end
 			ret = ret .. " __neil_init_functions[#__neil_init_functions+1] = function()"
 			script,scope,scopeid = NewScope("","init")
+			scope.returntype="void"
 			scope.startline = ins.linenumber
 			-- scope,scopeid = CurrentScope();		
 			ret = ret .. script
 		elseif ins.words[1].lword=="end" then
 			-- print("End of scope: "..scopeid.." >> "..scope.type.." "..ins.linenumber) -- debug
-			if suffixed(scope.type,"function") or suffixed(scope.type,"method") then
+			if suffixed(scope.type,"function") or suffixed(scope.type,"method") or scope.type=="init" then				
+				if not scope.returned then
+					local ud,err = UnDefer()
+					if not ud then return nil,err .. " in line "..ins.linenumber.." ("..chunk..")" end
+					ret = ret .. ud .."\t\t"
+				end
 				if scope.returntype~="void" and (not scope.returned) then
 					ret = ret .. "return ".._Neil.Neil..".Globals.ConvType(nil,'"..scope.returntype.."','auto-return value',false)\t"
 				end
