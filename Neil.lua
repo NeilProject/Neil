@@ -1,7 +1,7 @@
 -- <License Block>
 -- Neil.lua
 -- Neil
--- version: 20.08.06
+-- version: 20.08.08
 -- Copyright (C) 2020 Jeroen P. Broks
 -- This software is provided 'as-is', without any express or implied
 -- warranty.  In no event will the authors be held liable for any damages
@@ -539,6 +539,9 @@ local function ClassNew(class,...)
 end
 
 local function ClassStaticIndex(class,actclass,k)	
+	-- print("start") for k,v in pairs(class) do print( "Class has "..type(v).." "..k ) end print("end")
+	if class.StaticConstructor and (not class.StaticConstructorRun) then class.StaticConstructor.Value() class.StaticConstructorRun=true end
+
 	if k==".neilclass" then
 		return true
 	elseif k==".hasmember" then
@@ -577,6 +580,7 @@ local function ClassStaticIndex(class,actclass,k)
 end
 
 local function ClassStaticNewIndex(class,actclass,k,v)
+	if class.StaticConstructor and (not class.StaticConstructorRun) then class.StaticConstructor.Value() class.StaticConstructorRun=true end	
 	if false then -- reserved section for system defintions inside the class
 	else
 		local uk = k:upper(0)
@@ -676,7 +680,6 @@ function Class.NewMember(privateclass,nameclass,membertype,membername,protection
 	else 
 		cl.Class.Members[membername] = nm
 	end
-
 end
 
 function Class.NewMethod(privateclass,nameclass,membertype,membername,protection,rw,static,value)
@@ -688,9 +691,26 @@ function Class.NewMethod(privateclass,nameclass,membertype,membername,protection
 	assert(type(value)=="function","Illegal method: "..type(value))
 	local nm = {Type='Method', Constant=true, Value=value, ReturnType=membertype }
 	if static then
-		cl.Class.StaticMethods[membername:upper()] = nm
+		if membername:lower()=="constructor" then
+			assert(not cl.StaticConstructor,"There already is a static constructor!")
+			cl.Class.StaticConstructor = nm
+			--print("STATIC CONSTRUCTOR PRESENT")
+		elseif membername:lower()=="destructor" then
+			assert(not cl.StaticDestructor,"There already is a static destructor!")
+			cl.Class.StaticDestructor = nm
+		else
+			cl.Class.StaticMethods[membername:upper()] = nm
+		end
 	else 
-		cl.Class.Methods[membername:upper()] = nm
+		if membername:lower()=="constructor" then
+			assert(not cl.Constructor,"There already is a constructor!")
+			cl.Class.Constructor = nm
+		elseif membername:lower()=="destructor" then
+			assert(not cl.Destructor,"There already is a destructor!")
+			cl.Class.Destructor = nm
+		else
+			cl.Class.Methods[membername:upper()] = nm
+		end
 	end	
 end
 
@@ -1519,6 +1539,7 @@ local function Translate(chopped,chunk)
 		EndScope()
     end
 
+	local mkConstructor
 	function ClassParse(insid,ins,scope)
 		local cl_private = scope.classscope ~= "class"
 		if ins.words[1].lword=="end" then
@@ -1549,13 +1570,39 @@ local function Translate(chopped,chunk)
 		local scopeid = scope.id
 		scope.members = scope.members or {}
 		local members = scope.members; members.get = members.get or {}; members.set = members.set or {}
+
+		function mkConstructor(dtype)
+			assert(dtype,"Internal error: mkConstructor(nil)")
+			if property then return "Constructors and Destructors may not be properties" end
+			istype="void"
+			if i<#ins.words and ins.words[i+1].kind~="comment" then
+				if ins.words[i+1].word~="(" then return "Syntax error in "..dtype.." definition" end
+				if not ins.words[i+2] then return "Incomplete "..dtype.." definition" end
+				if ins.words[i+2]~=")" and (isstatic or dtype=="destructor") then
+					return "Destructors and static constructors do not take parameters" 
+				end
+				local f,e = DefineFunction(ins,i+2,istype,false,false,true)
+				ret = ret .. string.format("\t".. _Neil.Neil..".Class.NewMethod(%s,\"%s\", \"%s\", \"%s\", \"%s\", \"%s\", %s,    %s ",cl_private,scope.classname,istype,dtype,isglobal,rw,isstatic,f)
+				local s,sid = CurrentScope()
+				s.closure=")"
+				s.returntype="void"
+			else
+				local script,s,sid = NewScope("function()",dtype.."-function")
+				ret = ret .. string.format("\t".. _Neil.Neil..".Class.NewMethod(%s,\"%s\", \"%s\", \"%s\", \"%s\", \"%s\", %s,    %s ",cl_private,scope.classname,istype,dtype,isglobal,rw,isstatic,script)
+				s.closure=")"
+				s.returntype="void"
+			end
+		end
+
 		-- localplua = localplua and scope.kind~="script"
 		-- alwaysplua = alwaysplua or localplua
 		-- decladata
 		while not IsType(ins.words[i].lword) do
 			if i>#ins.words then return "Declaration syntax error" end
 			local w = ins.words[i].lword
-			if w=="global" or w=="public" then
+			if w=="constructor" or w=="destructor" then
+				return mkConstructor(w)				
+			elseif w=="global" or w=="public" then
 				if isglobal~="notset" then return "Protection level conflict" end
 				isglobal="public"
 			elseif w=="local" or w=="private" then
@@ -1600,7 +1647,9 @@ local function Translate(chopped,chunk)
 		-- Always Plua
 		realtype = istype 		
 		-- Class.NewMember(privateclass,nameclass,membertype,membername,protection,rw,static,value)
-		if property then
+		if identifier=="constructor" or identifier=="destructor" then
+			return mkConstructor(identifier)
+		elseif property then
 			local func
 			local nscopescript,nscope,nid = NewScope("","property-"..property.."-function")
 			if istype=="void" then return "Void type not valid for properties" end
