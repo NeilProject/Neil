@@ -154,7 +154,7 @@ do local kk
              return "nil"             
           elseif type(v)=="string" then   
              return v
-          elseif type(v)=="table" and v[".neilclass"] and v[".contains"]("ToString") then
+          elseif type(v)=="table" and v[".neilclass"] and v[".hasmember"]("ToString") then
              return v.ToString()
           else
              return tostring(v)
@@ -355,6 +355,7 @@ _Neil.Globals = setmetatable({},{
           local uk = k:upper()
           local want = Globals[uk]
           _Neil.Assert(want,"Defining unknown global identifier \""..k.."\"!")          
+		  if want.Constant and v == want.Value then return end -- This prevents some static conflicts
           _Neil.Assert(not want.Constant,k.." is a constant and cannot be overwritten")
           _Neil.Assert((not want.ReadOnly) or (ReadOnlyWrite.Globals),k.." is read-only and cannot be overwritten")
           Globals[uk].Value = ConvType(v,Globals[uk].Type,k)
@@ -513,8 +514,10 @@ local Locals = { NOTHINGNESS=TrueLocals.NOTHINGNESS }
 function _Neil.Inc(value) -- Using "++" will lead to translate to this function
 	if type(value)=="number" then
 		return value + 1
-	elseif type(value)=="table" and value[".neilclass"] and value[".contains"]("_Inc") then
-		return value._Inc()
+	elseif type(value)=="table" and value[".neilclass"] then 
+		local w,s = value[".hasmember"]("__Inc")
+		if not w then error("Class or object does not have __Inc") end
+		return value.__Inc()
 	else
 		error("Incrementor not usable on "..type(value))
 	end
@@ -523,8 +526,10 @@ end
 function _Neil.Dec(value) -- Using "--" will lead to translate to this function
 	if type(value)=="number" then
 		return value - 1
-	elseif type(value)=="table" and value[".neilclass"] and value[".contains"]("_Inc") then
-		return value._Inc()
+	elseif type(value)=="table" and value[".neilclass"] then 
+		local w,s = value[".hasmember"]("__Dec")
+		if not w then error("Class or object does not have __Dec") end
+		return value.__Dec()
 	else
 		error("Decrementor not usable on "..type(value))
 	end
@@ -536,7 +541,7 @@ function _Neil.Add(value,modvalue) -- Using "+=" will translate to this function
 	elseif type(value)=="string" then
 		return value .. Neil.Globals.ToString(modvalue)
 	elseif type(value)=="table" and value[".neilclass"] then
-		Neil.Assert(value[".contains"]("_Add"),"Class "..value[".neilclass"].." has no _Add() method")
+		Neil.Assert(value[".hasmember"]("_Add"),"Class "..value[".neilclass"].." has no _Add() method")
 		return value._Add(modvalue)
 	elseif type(value)=="table" then
 		value[#value+1] = modvalue
@@ -552,7 +557,7 @@ function _Neil.Subtract(value,modvalue) -- Using "-=" will translate to this fun
 	elseif type(value)=="string" then
 		return value:gsub(modvalue,"")
 	elseif type(value)=="table" and value[".neilclass"] then
-		Neil.Assert(value[".contains"]("_Subtract"),"Class "..value[".neilclass"].." has no _Subtract() method")
+		Neil.Assert(value[".hasmember"]("_Subtract"),"Class "..value[".neilclass"].." has no _Subtract() method")
 		return value._Subtract(modvalue)
 	elseif type(value)=="table" then
 		local temp = {}
@@ -719,6 +724,12 @@ function ClassIndex(trueobject,self,k)
 		return true
   elseif k:lower()==".neilclassobject" then
 	    return true
+  elseif k:lower()==".hasmember" then
+	local check = function(key) 
+		local fstatic = ClassStaticIndex(trueobject.class,trueobject.actclass,".hasmember")
+		return fstatic(key)
+	end
+	return check
   elseif k:lower()==".fromclass" then
 	    return trueobject.class
   elseif Globals.PREFIXED.Value(k,".") then
@@ -1054,6 +1065,7 @@ local function Chop(script,chunk)
 	local escape = false
 	local hexnum = false
 	local newword
+	local pure = false
 	local function idins()
 		local clean = {}
 		local haakjes = 0
@@ -1105,13 +1117,15 @@ local function Chop(script,chunk)
 		end
 		ins.kind = definition
 	end
-	local function newinstruction() 
+
+	local function newinstruction() 		
 		newword()
 		idins()
 		local ni = {  words = {{word="",kind="" } } } 
 		instruction[#instruction+1] = ni
 		hexnum=false
 	end
+
 	local function newline()
 		if not multiline then 
 			newinstruction()
@@ -1176,6 +1190,7 @@ local function Chop(script,chunk)
 		local lchar = char:lower()
 		local uasc = uchar:byte()
 		-- talk(i,char,lastchar,instring,incomment)
+
 		if char=="\n" then
 			newline()
 		elseif instring then
@@ -1192,6 +1207,21 @@ local function Chop(script,chunk)
 			if multiline and char=="/" and lastchar=="*" then incomment=false end
 		elseif char==" " or char=="\t" or char =="\r" then -- Ignore whitespaces... With apologies to the developers of the WhiteSpace programming language who thought these characters are valuable :-P
 			if cword().word~="" then newword() end
+		elseif char=="#" and i<=#script-5 and mid(script:lower(),1,5)=="pure" and #(cinstruction().words)==0  then
+			pure = true
+			newword()
+			cword().word="-- PURE --"
+			cword().kind="pure"
+			cinstruction().kind="pure"
+		elseif pure
+			cword().word = cword().word .. char
+			cword().kind = "pure"
+			cinstruction().kind="pure"
+			if cword().word=="#endpure" then 
+				cword().word = "-- END PURE --"
+				pure = false
+				newword()
+			end
 		elseif char==";" then
 			local directive
 			for i,v in ipairs(instruction[#instructions].words) do
