@@ -1190,6 +1190,7 @@ local function Chop(script,chunk)
 		local lchar = char:lower()
 		local uasc = uchar:byte()
 		-- talk(i,char,lastchar,instring,incomment)
+		-- --[[pure test]] print(#(cinstruction().words),char:gsub("\n","<CR>"),mid(script:lower(),i,5):gsub("\n","<CR>"),char=="#" , i<=#script-5 , mid(script:lower(),i,5)=="#pure" , #(cinstruction().words)==1)
 
 		if char=="\n" then
 			newline()
@@ -1207,13 +1208,14 @@ local function Chop(script,chunk)
 			if multiline and char=="/" and lastchar=="*" then incomment=false end
 		elseif char==" " or char=="\t" or char =="\r" then -- Ignore whitespaces... With apologies to the developers of the WhiteSpace programming language who thought these characters are valuable :-P
 			if cword().word~="" then newword() end
-		elseif char=="#" and i<=#script-5 and mid(script:lower(),1,5)=="pure" and #(cinstruction().words)==0  then
+		elseif char=="#" and i<=#script-5 and mid(script:lower(),i,5)=="#pure" and #(cinstruction().words)==1  then
 			pure = true
 			newword()
 			cword().word="-- PURE --"
 			cword().kind="pure"
-			cinstruction().kind="pure"
-		elseif pure
+			cinstruction().kind="pure"			
+		elseif pure then
+			--error("PURE FORCE QUIT!")
 			cword().word = cword().word .. char
 			cword().kind = "pure"
 			cinstruction().kind="pure"
@@ -2256,6 +2258,16 @@ local function Translate(chopped,chunk)
 		   if not result then return nil,error.." in line "..ins.linenumber.." ("..chunk..")" end
 		   ret = ret .. result
 		  --  error("Identifier from start processing not yet implemented")
+		elseif (ins.kind=="pure") then
+			local line = ""
+			local rep =  _Neil.MacroReplace or MacroReplace
+			for _,w in ipairs(ins.words) do if #line>0 then line = line .." " end line = line .. w.word end -- Should always be 1 word, but just in case
+			for si = #scopes , 0 , -1 do
+				for id,tt in pairs(scopes[si].identifiers) do
+					line = rep(line,"{$"..id.."$}",tt)
+				end
+			end
+			ret = ret .. line
 		else
 			-- print("<translation>\n","\r"..ret.."\n</translation>") -- debug
 			print(Serialize("Instruction_"..insid,ins))
