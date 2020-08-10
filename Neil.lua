@@ -1,7 +1,7 @@
 -- <License Block>
 -- Neil.lua
 -- Neil
--- version: 20.08.08
+-- version: 20.08.10
 -- Copyright (C) 2020 Jeroen P. Broks
 -- This software is provided 'as-is', without any express or implied
 -- warranty.  In no event will the authors be held liable for any damages
@@ -17,25 +17,8 @@
 -- misrepresented as being the original software.
 -- 3. This notice may not be removed or altered from any source distribution.
 -- </License Block>
---[[
-Neil.lua
-Neil
-version: 20.08.06
-Copyright (C) 2020 Jeroen P. Broks
-This software is provided 'as-is', without any express or implied
-warranty.  In no event will the authors be held liable for any damages
-arising from the use of this software.
-Permission is granted to anyone to use this software for any purpose,
-including commercial applications, and to alter it and redistribute it
-freely, subject to the following restrictions:
-1. The origin of this software must not be misrepresented; you must not
-claim that you wrote the original software. If you use this software
-in a product, an acknowledgment in the product documentation would be
-appreciated but is not required.
-2. Altered source versions must be plainly marked as such, and must not be
-misrepresented as being the original software.
-3. This notice may not be removed or altered from any source distribution.
-]]
+
+
 -- Creation of library
 local _Neil = {}
 _Neil.Neil = "Neil"
@@ -44,6 +27,9 @@ _Neil.UseDirectoryTable = { }
 _Neil.FileSystemCaseSensitive = false -- Must be set to true if directly reading from a Linux system or an other case senstive undeunderground
 
 local TranslationCount = 0
+
+-- forwards
+local DefineFunction
 
 -- keywords and operators
 local operators = {"++","--","!=" --[[Neil will replace != with ~=]],"~=","::=","+=","-=","==","<=",">=","//","||","&&" --[[ Maybe // is a bit odd to call an operator, but for Neil that's the easier way to work]], "/*", "*/",
@@ -63,12 +49,43 @@ local keywords = { "void","int","byte","number","bool","boolean","delegate","fun
 				   "return", -- We need that one, don't we?
 				   "true", "false", -- The two boolean values
 				   "nil", "null", -- "null" will be replaced by "nil"
-				   "init","defer"
+				   "init","defer","div","var","break"
 
 }
 
 local declasupport = {"global","public","private","final","abstract", "get", "set", "local","static","const", "readonly" }
-local types = {"void","int","string","bool","boolean","delegate","function","userdata","number","table"}
+local types = {"void","int","string","bool","boolean","delegate","function","userdata","number","table","plua","var"}
+
+local quickmetaparameters = {
+	   index = "self, key",
+	   newindex = "self, key, value ",
+	   call = "self, ...",
+	   tostring = "self",
+	   len = "self",
+	   pairs = "self",
+	   ipairs = "self",
+	   gc = "self",
+	   unm = "self, other",
+	   add = "self, other",
+	   sub = "self, other",
+	   mul = "self, other",
+	   div = "self, other",
+	   idiv = "self, other",
+	   pow = "self, other",
+	   mod = "self, other",
+	   concat = "self, other",
+	   band = "self, other",
+	   bor = "self, other",
+	   bxor = "self, other",
+	   bnot = "self, other",
+	   shl = "self, other",
+	   shr = "self, other",
+	   lt = "self, other",
+	   le = "self, other",
+	   gt = "self, other",
+	   ge = "self, other"
+
+}
 
 local UsedByNeil = {}
 
@@ -130,6 +147,7 @@ do local kk
           return v
        end,   
 	   ['var'] = function(v) return v end,
+	   ['QuickMeta_group'] = function(v) return v end,
        ['string'] = function(v)
           if type(v)=="nil" then
 			 _Neil.Assert(not strict,"Got nil, but expected a string"..kk)
@@ -171,6 +189,16 @@ end
 local substr = string.sub
 local Globals
 Globals = {
+	['TABLECONTAINS'] = {Type='delegate', Constant=true, Value=function(tab,want) 
+		for i,v in ipairs(tab) do 
+			if v==want then return i end
+		end
+		return nil
+	end},
+	['LUAVERSION'] = {Type='delegate', Constant=true, Value = function() 
+		local ret,_ = _VERSION:gsub("Lua ","") 
+		return tonumber(ret) 
+	end},
     ['EXPAND'] = {Type='delegate', Value=function (t,p)
 		assert(type(t)=="table","Table expected in Expand request (got "..type(t)..")\n"..debug.traceback())
 		p = tonumber(p) or 1                                 
@@ -289,7 +317,31 @@ Globals = {
 			end
 		end
 	end},
+	["TYPE"] = {Type='delegate', Constant=true, Value=function(v)
+		-- stuff for classes and things, come later!
+		return type(v)
+	end},
 }
+
+local function imodtoglob(name,asname)
+	local module = {}
+	for k,v in pairs(_G[name:lower()]) do module[k]=v end
+	Globals[(asname or name):upper()] = { Type='Lua Module', Constant=true, Value=setmetatable({},{
+		__newindex=function() error("Writing to internal module "..name.." prohibited") end,
+		__index=function(self,key) 
+			local lkey=key:lower() 
+			if module[lkey] then return module[lkey] end
+			if module[key] then return module[key] end
+			error("Module "..name.." does not appear to have an element named "..key)
+		end
+	})}
+end
+
+for k,m in pairs {"Math","IO","OS",MString = "String", MTable = "Table", "CoRoutine", "Debug", "Package" } do
+	if _G[m:lower()] then 
+		if type(k)=="number" then imodtoglob(m) else imodtoglob(m,k) end
+	end
+end
 _Neil.Globals = setmetatable({},{
      __index = function(s,k)
           local uk = k:upper()
@@ -416,7 +468,7 @@ local function Serialize(name,value,tabs)
 	for i=1,tabs do ret = ret .. "\t" end
 	if name~="" then ret = ret .. name .. " = " end
 	if t == "number" or t=="boolean" then
-		ret = ret .. value 
+		ret = ret .. tostring(value)
 	elseif t=="string" then
 		ret = ret .. "\""..SafeString(value).."\""
 	elseif t=="userdata" or t=="function" then
@@ -571,11 +623,14 @@ local function ClassNew(class,actclass,...)
 	  trueobject.class=class
 	  trueobject.actclass=actclass
 	  obj = setmetatable({},{
-	  	  __index = function(s,k) return ClassIndex(trueobject,obj,k:upper()) end,
-		  __newindex = function(s,k,v) return ClassNewIndex(trueobject,obj,k:upper(),v) end,
+	  	  __index = function(s,k) return ClassIndex(trueobject,obj,k) end,
+		  __newindex = function(s,k,v) return ClassNewIndex(trueobject,obj,k,v) end,
 		  __call = function(s,...) if class.Methods.ONCALL then return class.Methods.ONCALL.Value(obj,...) else error("Class has no \"OnCall\" method") end end,
-		  __len = function(s,...) if class.Methods.ONLEN then return class.Methods.ONLEN.Value(obj,...) else error("Class has no \"OnLen\" method") end end,
+		  __len = function(s,...) if class.Methods.__LENGTH then return class.Methods.__LENGTH.Value(obj,...) else error("Class has no \"__Length\" method") end end,
+		  __pairs = function(s) if class.Methods.__PAIRS then return class.Methods.__PAIRS.Value(obj)() else error("Class has no \"__Pairs\" method") end end,
+		  __ipairs = function(s) if class.Methods.__IPAIRS then return class.Methods.__IPAIRS.Value(obj)() else error("Class has no \"__IPairs\" method") end end,
 		  __gc = function(s,...) if trueobject.destructor then trueobject.destructor.Value(obj) end end
+		  
 	  })
 	  if trueobject.class.Constructor then
 	     trueobject.AllowReadOnly = true
@@ -589,6 +644,9 @@ end
 
 local function ClassStaticIndex(class,actclass,k)	
 	ClassStaticConstructorCall(class,actclass)
+	if type(k)=="number" then 
+		return ClassStaticIndex(class,actclass,"__NumberIndex")(k)
+	end
 	if k==".neilclass" then
 		return true
 	elseif k==".hasmember" then
@@ -628,6 +686,10 @@ end
 
 local function ClassStaticNewIndex(class,actclass,k,v)
 	ClassStaticConstructorCall(class,actclass)
+	if type(k)=="number" then
+		ClassStaticIndex(class,actclass,"__NumberNewIndex")(k,v)
+		return
+	end
 	if false then -- reserved section for system defintions inside the class
 	else
 		local uk = k:upper(0)
@@ -650,6 +712,9 @@ local function ClassStaticNewIndex(class,actclass,k,v)
 end
 
 function ClassIndex(trueobject,self,k)
+  if type(k)=="number" then 
+	return ClassIndex(trueobject,self,"__NumberIndex")(k)
+  end
   if k:lower()==".neilclass" then
 		return true
   elseif k:lower()==".neilclassobject" then
@@ -663,7 +728,7 @@ function ClassIndex(trueobject,self,k)
   assert(what,"Object has no member named "..k)
   if ctype=="Static" then
 	return trueobject.actclass.Value[k]
-  end
+  end  
   local uk = k:upper()
   if trueobject.class.Members[uk] then return trueobject[uk].Value end
   if trueobject.class.Methods[uk] then return function(...) return trueobject.class.Methods[uk].Value(self,...) end end
@@ -673,6 +738,10 @@ function ClassIndex(trueobject,self,k)
 end
 
 function ClassNewIndex(trueobject,self,key,value)
+	if type(key)=="number" then
+		ClassIndex(trueobject,self,"__NumberNewIndex")(key,value)
+		return
+	end
 	local lk,uk = key:lower(),key:upper()
 	if false then -- reserved for system functionality later
 	elseif Globals.PREFIXED.Value(key,".") then
@@ -721,7 +790,8 @@ function Class.Create(name,private,extend)
 				    return ClassNew(ret.Class,ret,...)
 				end,
 				__index=function(s,k) return ClassStaticIndex(ret.Class,ret,k) end,
-				__newindex=function(s,k,v) return ClassStaticNewIndex(ret.Class,ret,k,v) end
+				__newindex=function(s,k,v) return ClassStaticNewIndex(ret.Class,ret,k,v) end,
+				__len=function(s) return ClassStaticIndex(ret.Class,ret,"__LENGTH")() end
 			})		
 	if private then 
 		GroupClasses[name]=ret 
@@ -1265,8 +1335,9 @@ local function DeclaHelp(w)
 end
 
 local function IsType(w)
-	if _Neil.Globals.Prefixed(w:lower(),"class.") then return true end
+	-- if _Neil.Globals.Prefixed(w:lower(),"class.") then return true end
 	for _,ww in ipairs(types) do 
+		-- print(w,ww,w:lower()==ww)
 		if w:lower()==ww then 
 			return true 
 		end 
@@ -1318,6 +1389,16 @@ local function LitTrans(ins,pos,endword,unk,unknownprefix)
 		   end
 		elseif word.lword == "new" then
 			TriggerNew = 2
+		elseif word.lword == "div" then
+			if Globals.LUAVERSION.Value()<5.2 then return nil,"The 'div' keyword's translation requires Lua 5.2 or higher" end
+			ret = ret .. " // " -- Sorry, folks, but I decided to stick with the C method for commenting. This keyword can back this up, and beside you still have floor function
+		elseif IsType(word.word) and (TriggerNew<=0) then
+			if i>=#ins.words or ins.words[i+1].kind=="comment" then return nil,"Delegate expected" end
+			if ins.words[i+1].word~="(" then return nil,"Delegate expects function parameters" end
+			local f,err = DefineFunction(ins,i+2,word.word) --,alwaysplua,pluaprefix,needself)
+			if not f then return nil,"Delegate error: "..e end
+			ret = ret .. f
+			break
         elseif word.kind == "keyword" then
 		   if word.lword == "not" or word.lword=="nil" or word.lword=="and" or word.lword=="or" or word.lword=="true" or word.lword=="false" or word.lword == "ipairs" or word.lword == "pairs" then
 		      ret = ret .. " "..word.lword.." "
@@ -1346,10 +1427,10 @@ local function LitTrans(ins,pos,endword,unk,unknownprefix)
 		if TriggerNew>0 then TiggerNew = TriggerNew - 1 end
 	end
 	return ret,"Ok",fendword
-	-- return nil,"LitTrans not yet completed (WIP issue)"
+	
 end
 
-local function DefineFunction(instruction,startword,returntype,alwaysplua,pluaprefix,needself)
+function DefineFunction(instruction,startword,returntype,alwaysplua,pluaprefix,needself)
 	local funcform = "function ("
 	local startcheck = ""
 	local params = {}
@@ -1369,7 +1450,7 @@ local function DefineFunction(instruction,startword,returntype,alwaysplua,pluapr
 			param.type=words[pos].lword
 			pos = pos + 1
 		end
-		if words[pos].kind~="identifier" then return nil,"Function definition syntax error (identiefier expected)" end
+		if words[pos].kind~="identifier" then return nil,"Function definition syntax error (identifier expected)\n"..Serialize(tostring(pos),words) end
 		param.name = words[pos].word
 		pos = pos + 1
 		if words[pos].word==")" then break end
@@ -1390,7 +1471,7 @@ local function DefineFunction(instruction,startword,returntype,alwaysplua,pluapr
 			end
 		end
 		if words[pos].word==")" then break end
-		if words[pos].word~="," then return nil,"Function definition syntax error (comma expected)" end
+		if words[pos].word=="," then pos = pos + 1 else return nil,"Function definition syntax error (comma expected)" end
 	end
 	-- print(_Neil.Globals.Serialize("Parameters",params))
 	local tscript,tscope,tid = NewScope("",returntype.."-function")
@@ -1607,7 +1688,7 @@ local function GetFunctionType()
 	for i=#scopes,1,-1 do
 		scope=scopes[i]
 		if s(scope.type,"function") or s(scope.type,"method") then
-		   assert(scope.returntype,"INTERNAL ERROR! Undefined return-type for function/method. This can only happen due to a bug!\nPlease report!")
+		   assert(scope.returntype,"INTERNAL ERROR! Undefined return-type for function/method. This can only happen due to a bug!\nPlease report!\n"..Serialize("Function Scope Data",scope))
 		   return scope.returntype
 		end
 		if scope.type=="init" or scope.type=="quickmeta-index" then
@@ -1632,6 +1713,7 @@ local function Translate(chopped,chunk)
 	local allowground
 	local cfor = 0
 	local regions = 0
+	local modules = {}
 
 	function _EndScope()
 		local s,sid = CurrentScope()
@@ -1653,10 +1735,11 @@ local function Translate(chopped,chunk)
 			print(scopes[i].type)
 			if i<=0 or scopes[i].type=="script" then return nil,"Internal error: Can't undefer here" end
 			i = i - 1 
-		end
-		if not scopes[i].defer then return "--[[ No undefer in scope "..scopes[i].id.."]]\t" end
+		end		
+		if not scopes[i].defer then return "--[[ No undefer in scope "..scopes[i].id.."]]\t",nil end
 		local deferid = string.format("%s_defer",scopes[i].id)
-		return  "if "..deferid.." then for i=#"..deferid..",1,-1 do "..deferid.."[i].func(".._Neil.Neil..".Globals.Expand( "..deferid.."[i].param ) ) end end\t" 
+		return  "if "..deferid.." then for i=#"..deferid..",1,-1 do "..deferid.."[i].func(".._Neil.Neil..".Globals.Expand( "..deferid.."[i].param ) ) end end\t", nil
+		
 	end
 
 
@@ -1814,6 +1897,35 @@ local function Translate(chopped,chunk)
 	end
 	-- </ CLASS PARSE >
 
+	--- <QUICK META>
+	function ParseQuickMeta(ins)
+		scope.qmparsed = scope.qmparsed or {}
+		if #ins.words>=2 and ins.words[2].kind~="comment" then return "QuickMeta multiword error" end		
+		local event=ins.words[1].lword
+		if event=="end" then
+			_EndScope()
+			ret = ret .. "})\t end"
+			return
+		end
+		if scope.qmparsed[event] then return "QuickMeta dupe event: ".. event end
+		if not quickmetaparameters[event] then return "Unknown QuickMeta event" end
+		scope.qmparsed[event] = true
+		ret = ret .. "['__"..event.."'] = function ("..quickmetaparameters[event]..")\t"
+		local scr,scp,sid = NewScope("","QuickMeta-"..event.."-event-method-function")
+		ret = ret .. scr
+		scp.returntype="var"
+		scp.closure=","
+		scp.identifiers = scp.identifiers or {}
+		for _,v in pairs(Globals.SPLIT.Value(quickmetaparameters[event],",")) do
+			local tv = Globals.TRIM.Value(v)
+			if tv~="..." then scp.identifiers[tv:upper()] = tv end
+			-- print("Added: '"..tv.."'")
+		end
+		-- print(Serialize(event.."-scope",scp))
+		-- error("Parsing Quick Meta not yet fully up!")
+	end
+	--- </QUICK META>
+
 	for insid,ins in ipairs(chopped.instructions) do
 		if cline ~= ins.linenumber then ret = ret .."\n--[["..(ins.linenumber or "<??>").."]]\t"; cline=ins.linenumber end
 		--print(_Neil.Globals.Serialize("ins",ins))
@@ -1855,6 +1967,10 @@ local function Translate(chopped,chunk)
 			end
         elseif scope.classscope then -- must after the preprocessor directives be first!!!
 			local e = ClassParse(insid,ins,scope)
+			if e then return nil,e.." in line #"..ins.linenumber.." ("..chunk..")" end
+			scope,scopeid = CurrentScope()
+		elseif scope.type=="quickmeta" then 
+			local e = ParseQuickMeta(ins)
 			if e then return nil,e.." in line #"..ins.linenumber.." ("..chunk..")" end
 			scope,scopeid = CurrentScope()
 		elseif ins.words[1].lword == "class" or ins.words[1].lword == "group" then
@@ -1909,6 +2025,49 @@ local function Translate(chopped,chunk)
 			deferid = string.format("%s_defer",scopes[i].id)
 			scopes[i].defer = true
 			ret = ret .. deferid .. " = " .. deferid .. " or {};  "..deferid.."[#"..deferid.."+1] = { func="..GetIdentifier(ins.words[2].word)..", param={"..para.."} }"
+		elseif ins.words[1].lword=="quickmeta" then
+			if scope.type~="script" then return nil,"I can't start a quickmeta on line "..ins.linenumber.." ("..chunk..")" end
+			local qmtype,qmmodule,qmname,qmidentifier
+			for i=2,#ins.words do
+				local word = ins.words[i]
+				if word.kind=="comment" then break end
+				if qmidentifier then return nil,"QuickMeta Syntax Error in line "..ins.linenumber.." ("..chunk..")" end
+				if word.lword == "class" or word.lword == "group" then
+					if qmtype then return nil,"QuickMeta conflict in line "..ins.linenumber.." ("..chunk..")" end
+					qmtype=word.lword
+				elseif word.lword == "module" then
+					if qmmodule then return nil,"QuickMeta dupe module in line "..ins.linenumber.." ("..chunk..")" end
+					qmmodule = true
+					local i=0
+					repeat 
+						i = i + 1
+						qmname = scope.id .. "_module_"..i
+					until not Globals.TABLECONTAINS.Value(modules,qmname)
+				elseif word.kind == "identifier" then
+				   qmidentifier = word.uword
+				   if not qmmodule then					  
+					  if Globals[qmidentifier] then return nil,"QuickMeta creates duplicate identifier in line "..ins.linenumber.." ("..chunk..")" end
+				   end
+				else
+					return nil,"QuickMeta didn't exect "..word.kind.." "..word.word.." in line "..ins.linenumber.." ("..chunk..")"
+			    end
+            end
+			if (not qmmodule) and (not qmidentifier) then return nil,"QuickMeta nameless in line "..ins.linenumber.." ("..chunk..")" end
+			qmtype = qmtype or "group"
+			if not qmmodule then 
+				qmname = _Neil.Neil..".Globals."..(qmidentifier:upper()) 
+				Globals[qmidentifier:upper()] = { Type="QuickMeta_"..qmtype, QuickMetaType=qmtype, UndefinedConstant=true }
+				-- error(Serialize("Globals",Globals)) -- Force debug
+				-- for k,v in pairs(Globals) do print(k,v.Type) end error("OBSERVE!") -- forced debug
+			end
+			script,scope,scopeid = NewScope("","quickmeta")
+			scope.QuickMetaData = {Type=qmtype, Module=qmmodule }
+			ret = ret .. script
+			if qmtype=="class" then
+				ret = ret .. qmname .. " = function() return setmetatable({},{"
+			else
+				ret = ret .. "do "..qmname.." = setmetatable({},{"
+			end
 		elseif ins.words[1].lword=="if" or ins.words[1].lword=="while" then
 			if (not allowground) and scope.type=="script" then return nil,ins.words[1].word.." statement not allowed in ground scope" end
 			local trans,err = NewConditionScope(ins.words[1].lword,ins,unknowns)
@@ -1938,13 +2097,18 @@ local function Translate(chopped,chunk)
 		elseif ins.words[1].lword=="return" then
 		    local ftype = GetFunctionType()
 			local ud,err = UnDefer()
-			if ud then return nil,err .. "in line "..ins.linenumber.." ("..chunk..")" end
+			if not ud then return nil,(err or "No data from Undefer received (internal error. Please report) in line ")..ins.linenumber.." ("..chunk..")" end
+			local fscope
+			for i=#scopes,1,-1 do
+				if Globals.SUFFIXED.Value(scopes[i].type,"function") or scopes[i].type=="init" or scopes[i].type=="script" then fscope = scopes[i]; break end
+			end
+			assert(fscope,"INTERNAL ERROR! Function scope for return could not be retrieved")
 			if ftype=="void" then
 				if #ins.words>2 then
 				   if ins.words[2].kind~="comment" then return nil,"Void functions may not return any value" end
 				end
 				ret = ret .. ud.."\treturn;"
-				scope.returned = true
+				fscope.returned = true
 			elseif ftype=="plua" or ftype=="var" then
 				local expression,error = LitTrans(ins,2,nil,unknowns)
 				if not expression then return nil,error.." in line "..ins.linenumber.." ("..chunk..")" end
@@ -1953,7 +2117,7 @@ local function Translate(chopped,chunk)
 				local expression,error = LitTrans(ins,2,nil,unknowns)
 				if not expression then return nil,error.." in line "..ins.linenumber.." ("..chunk..")" end
 				ret = ret .. "return ".._Neil.Neil..".Globals.ConvType("..expression..",'"..ftype.."','return value',false)"
-				scope.returned = true
+				fscope.returned = true
             end
 		elseif ins.words[1].lword=="init" then
 			if scope.type~="script" then return nil,"init only allowed in ground scope" end
@@ -1971,7 +2135,7 @@ local function Translate(chopped,chunk)
 					if not ud then return nil,err .. " in line "..ins.linenumber.." ("..chunk..")" end
 					ret = ret .. ud .."\t\t"
 				end
-				if scope.returntype~="void" and (not scope.returned) then
+				if (scope.returntype~="void" and scope.returntype~="var") and (not scope.returned) then
 					ret = ret .. "return ".._Neil.Neil..".Globals.ConvType(nil,'"..scope.returntype.."','auto-return value',false)\t"
 				end
 				ret = ret .."end\t"
@@ -2054,6 +2218,8 @@ local function Translate(chopped,chunk)
 			ret = ret .."\t local with_"..scopeid.." = "..dw
 			scope.with = "with_"..scopeid
 			print("with "..scope.with.." <= "..dw)
+		elseif ins.words[1].word=="break" then
+			ret = ret .. "break\t"
 		elseif (ins.words[1].kind=="identifier"  or ins.words[1].kind=="with-mark") and ins.kind=="instruction" then
 		   if (not allowground) and scope.type=="script" then return nil,"Instruction not allowed in ground scope ("..chunk..", line #"..ins.linenumber..")" end
 		   local result,error = LitTrans(ins,1,nil,unknowns)
