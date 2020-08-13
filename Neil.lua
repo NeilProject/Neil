@@ -1771,7 +1771,7 @@ local function GetFunctionType()
 	return "var" -- Should never happen,but just in case!
 end
 
-local switches = { oud = {}, nieuw =false }
+local switches = { oud = {}, nieuw = {} }
 local switchmethod
 
 function switches.oud.start(ins,unk)
@@ -1834,6 +1834,99 @@ function switches.oud.einde(scope)
 	_EndScope() -- print(CurrentScope()) -- yes, this needs to be done TWICE so I need one here!
 	return "end end","Ok"
 end
+
+function switches.oud.replacer(r) return r end
+
+function switches.nieuw.start(ins,unk)
+	local script,scope,scopeid = NewScope("","switch")
+	local ret = "" 
+	if #ins.words<2 then return nil,"Incomplete switch" end
+	do -- comments can now really spook the process up, so I don't want them, at all!
+		local cmtremover = {}
+		for _,w in ipairs(ins.words) do
+			if w.kind~="comment" then cmtremover[#cmtremover+1]=w end
+		end
+		ins.words = cmtremover
+	end
+	if #ins.words<2 then return nil,"Incomplete switch" end
+	scope.countcases = 0
+	scope.casecheck = "switch_check_var_"..scope.id.."_value"
+	scope.casestyle = "nieuw"
+	local scr,err = LitTrans(ins,2,nil,unk)
+	if not scr then return nil,"Switch syntax error: "..err end
+	ret = ret .. "do "..script.." local "..scope.casecheck.." = "..scr.."\t ***SWITCHREMOVE:"..scope.id.."*** end"
+	scope.replacer = ""
+	return ret,"Ok"
+end
+
+function switches.nieuw.case(ins,scope)
+	local ret = ""	
+	if #ins.words<2 then return nil,"Incomplete case" end
+	if scope.countcases == 0 then scope.replacer = scope.replacer .. "if " else scope.replacer = scope.replacer .. "elseif" end
+	if scope.hasdefault then return nil,"'Case' no longer allowed when a 'Default' has been used" end
+	for i=2,#ins.words do
+		local word = ins.words[i]
+		if word.kind=="comment" then break end
+		if word.kind~="string" and word.kind~="number" and (word.word~="true" or word.word~="false") then return nil,"Case requires complete constant value" end
+		if i~=2 then scope.replacer = scope.replacer .. " or " end
+		scope.replacer = scope.replacer .. "("..scope.casecheck.." == "
+		if word.kind=="string" then scope.replacer = scope.replacer .. '"' .. word.word .. '"' else scope.replacer = scope.replacer .. word.word end
+		scope.replacer = scope.replacer .. ")"
+	end
+	scope.replacer = scope.replacer .. " then "
+	if scope.countcases~=0 then 
+		local casescope,caseid = CurrentScope ()
+		if not casescope.fallthrough then ret = ret .. " goto "..scope.id.."__theend " end
+		_EndScope() 
+		ret = ret .." end " 
+	end
+	local cscript,cscope,cscopeid = NewScope("","case")
+	-- print("Case",CurrentScope())
+	local label = scope.id.."__case"..scope.countcases
+	ret = ret .. " ::"..label..":: do "..cscript .. "\t"
+	scope.replacer = scope.replacer .. " goto "..label.." "
+	scope.countcases = scope.countcases + 1
+	return ret,"Ok"
+end
+
+function switches.nieuw.default(ins,scope)
+	local ret = ""
+	if #ins.words>1 and ins.words[2].kind~="comment" then return nil,"Default does not expect anything" end
+	if scope.countcases == 0 then return nil,"Default without prior Cases" end
+	scope.replacer = scope.replacer .. " else goto "..scope.id.."__default"
+	do
+		local casescope,caseid = CurrentScope()
+		if not casescope.fallthrough then ret = ret .. " goto "..scope.id.."__theend " end
+	end
+	_EndScope()
+	scope.hasdefault = true
+	local cscript,cscope,cscopeid = NewScope("","default")
+	local label = scope.id.."__default"
+	ret = ret .. "end ::"..label..":: do "..cscript .. "\t"
+	return ret,"Ok"
+end
+
+function switches.nieuw.fallthrough(scope)
+    if scope.fallthrough then return nil,"Dupe fallthrough" end
+	scope.fallthrough = true
+	return "--[[ Fallthrough request ]]  ","Ok"
+end
+
+function switches.nieuw.einde(scope)
+	if scope.cases == 0 then return nil,"Switch without Case" end
+	if not scope.hasdefault then scope.replacer = scope.replacer .." else goto "..scope.id.."__theend\t" end
+	--error("EINDE")
+	--print(CurrentScope())	
+	_EndScope() -- print(CurrentScope()) -- yes, this needs to be done TWICE so I need one here!
+	return "end end ::"..scope.id.."__theend:: ","Ok"
+end
+
+function switches.nieuw.replacer(r,scope) 
+    --print(Serialize("SwitchScope",scope))
+	--error(r.." "..scope.replacer)
+	return MacroReplace(r,"***SWITCHREMOVE:"..scope.id.."***",scope.replacer)
+end
+
 
 local function decideswitchmethod()
 	if (not switches.nieuw) or Globals.LUAVERSION.Value()<5.2 then return "oud" else return "nieuw" end
@@ -2164,6 +2257,12 @@ local function Translate(chopped,chunk)
 			end
 			ret = ret .. r .."\t"
 			scope,scopeid = CurrentScope()
+	    elseif ins.words[1].lword=="fallthrough" then
+			if scope.type~="case" then return nil,"Unexpected '"..ins.words[1].word.."' in line #"..ins.linenumber.." ("..chunk..")" end
+			local sws = scopes[#scopes-1]
+			local r,e = switches[sws.casestyle].fallthrough(scope)
+			if not r then return nil,e.." in line #"..ins.linenumber.." ("..chunk..")" end
+			ret = ret .. r
 		elseif scope.type=="switch" then
 			return nil,"Illegal action in switch scope in line #"..ins.linenumber.." ("..chunk..")" 
 		elseif ins.words[1].lword=="switch" then
@@ -2359,7 +2458,8 @@ local function Translate(chopped,chunk)
 			elseif scope.type=="repeat" then
 				return nil,"Repeat scope cannot be ended with the End keyword (Line #"..ins.linenumber.." in chunk "..chunk")"
 			elseif scope.type=="case" or scope.type=="default" then
-			    local r,e = switches[switchmethod].einde(scopes[#scopes-1]) 
+				ret = switches[switchmethod].replacer(ret,scopes[#scopes-1])
+			    local r,e = switches[switchmethod].einde(scopes[#scopes-1]) 				
 				if not r then return nil,e," in line "..ins.linenumber.." ("..chunk..")" end
 				ret = ret .. r
 				scope,scopeid = CurrentScope()
