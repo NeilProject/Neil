@@ -226,7 +226,18 @@ Globals = {
 	['COUT'] = {Type='delegate', Constant=true,Value=function(...) io.write(Globals.SOUT.Value(...)) end },
 	['PRINT'] = {Type='delegate', Constant=true, Value=function(...) print(...) end },
 	['SPRINTF'] = {Type='delegate', Constant=true, Value=string.format },
-	['PRINTF'] = {Type='delegate', Constant=true, Value=function(f,...) _Neil.Assert(type(f)=="string","Format value must be string") _Neil.Globals.Cout(_Neil.Globals.SPrintF(f,...)) end},
+	['PRINTF'] = {Type='delegate', Constant=true, Value=function(f,...) _Neil.Assert(type(f)=="string","Format value must be string") 
+		-- _Neil.Globals.Cout(_Neil.Globals.SPrintF(f,...)) 
+		local s,e = pcall(_Neil.Globals.SPrintF,f,...)
+		if not s then
+			local err = e.."\nPrintF(\""..f.."\""
+			for i,k in ipairs{...} do err = err..", "..k end
+			err=err..")\n\n"..debug.traceback()
+			error(err)
+		else
+		    Globals.COUT.Value(e)
+		end
+	end},
 	['CONVTYPE'] = {Type='delegate', Constent=true, Value=ConvType },
 	['TOSTRING'] = {Type='delegate', Constant=true,Value=function(v) return ConvType(v,"string") end },
 	["REPLACE"] = {Type='delegate', Constant=true,Value=string.gsub },
@@ -1399,6 +1410,12 @@ local function GetIdentifier(id,unk,unknownprefix,ins)
 	id = id:upper()
 	if _Neil.Globals.prefixed(id,"CLASS.") then error("Class recognition NOT yet supported!") end
 	for i=#scopes,0,-1 do
+		if not scopes[i] then 
+			error(string.format("INTERNAL ERROR!\n\nscopeid=%d\nscopes=%d\n\n%s",i,#scopes,Serialize("Scopes",scopes)))
+		end
+		if not scopes[i].identifiers then
+			error("INTERNAL ERROR! PLEASE REPORT!\n\n".."Identiferliess scope\n\n"..Serialize("SCOPES["..i.."]",scopes[i])) 
+		end
 		local f = scopes[i].identifiers[id]
 		if scopes[i].type=="class" or scopes[i].type=="group" or scopes[i].type=="module" then 
 		   classed="--[[CLASSED:"..scopes[i].id.."]]" -- This is for classes to put things right!
@@ -1754,6 +1771,82 @@ local function GetFunctionType()
 	return "var" -- Should never happen,but just in case!
 end
 
+local switches = { oud = {}, nieuw =false }
+local switchmethod
+
+function switches.oud.start(ins,unk)
+	local script,scope,scopeid = NewScope("","switch")
+	local ret = "do "..script
+	if #ins.words<2 then return nil,"Incomplete switch" end
+	if ins.words[2].kind == "comment" then return nil,"Illegal comment" end		
+	scope.countcases = 0
+	scope.casecheck = "switch_check_var_"..scopeid.."_value"
+	scope.casestyle = "oud"
+	local scr,err = LitTrans(ins,2,nil,unk)
+	if not scr then return nil,"Switch syntax error: "..err end
+	ret = ret .. " local "..scope.casecheck.." = "..scr.."\t"
+	return ret,"Ok"
+end
+
+function switches.oud.fallthrough()
+	return nil,"Fallthrough NOT supported in current switch style"
+end
+
+function switches.oud.case(ins,scope)
+	local ret = ""
+	if #ins.words<2 then return nil,"Incomplete case" end
+	if scope.countcases == 0 then ret = "if " else ret = "elseif" end
+	if scope.hasdefault then return nil,"'Case' no longer allowed when a 'Default' has been used" end
+	for i=2,#ins.words do
+		local word = ins.words[i]
+		if word.kind=="comment" then break end
+		if word.kind~="string" and word.kind~="number" and (word.word~="true" or word.word~="false") then return nil,"Case requires complete constant value" end
+		if i~=2 then ret = ret .. " or " end
+		ret = ret .. "("..scope.casecheck.." == "
+		if word.kind=="string" then ret = ret .. '"' .. word.word .. '"' else ret = ret .. word.word end
+		ret = ret .. ")"
+	end
+	ret = ret .. " then "
+	if scope.countcases~=0 then _EndScope() end
+	local cscript,cscope,cscopeid = NewScope("","case")
+	-- print("Case",CurrentScope())
+	ret = ret .. cscript .. "\t"
+	scope.countcases = scope.countcases + 1
+	return ret,"Ok"
+end
+
+function switches.oud.default(ins,scope)
+	local ret = ""
+	if #ins.words>1 and ins.words[2].kind~="comment" then return nil,"Default does not expect anything" end
+	if scope.countcases == 0 then return nil,"Default without prior Cases" end
+	ret = ret .. " else "
+	_EndScope()
+	scope.hasdefault = true
+	local cscript,cscope,cscopeid = NewScope("","default")
+	ret = ret .. cscript .. "\t"
+	return ret,"Ok"
+end
+
+function switches.oud.einde(scope)
+	if scope.cases == 0 then return nil,"Switch without Case" end
+	--error("EINDE")
+	--print(CurrentScope())	
+	_EndScope() -- print(CurrentScope()) -- yes, this needs to be done TWICE so I need one here!
+	return "end end","Ok"
+end
+
+local function decideswitchmethod()
+	if (not switches.nieuw) or Globals.LUAVERSION.Value()<5.2 then return "oud" else return "nieuw" end
+end
+
+local function switchhandler(ins,scope)
+	if ins.words[1].word=="case" then
+		return switches[switchmethod].case(ins,scope)
+	else
+		return switches[switchmethod].default(ins,scope)
+	end
+end
+
 
 local function Translate(chopped,chunk)
 	local ret,scope,scopeid = NewScope("--[[ Neil Translation stareted "..os.date().."; "..os.time().." ]]\t local __neil_init_functions = {};\tlocal __neil_staticsdefined = {}","script")
@@ -2057,6 +2150,29 @@ local function Translate(chopped,chunk)
 			local e = ClassParse(insid,ins,scope)
 			if e then return nil,e.." in line #"..ins.linenumber.." ("..chunk..")" end
 			scope,scopeid = CurrentScope()
+		elseif ins.words[1].lword=="case" or ins.words[1].lword=="default" then
+			local r,e
+			if #scopes==1 then return nil,"Grounded case/default in line #"..ins.linenumber.." ("..chunk..")" end
+			if scopes[#scopes-1].type=="switch" then 
+				r,e = switchhandler(ins,scopes[#scopes-1]) 
+				if not r then return nil,e.." in line #"..ins.linenumber.." ("..chunk..")" end
+			elseif scopes[#scopes].type=="switch" then 
+				r,e = switchhandler(ins,scopes[#scopes]) 
+				if not r then return nil,e.." in line #"..ins.linenumber.." ("..chunk..")" end
+			else 
+				return nil,ins.word[1].word.." without Switch in line #"..ins.linenumber.." ("..chunk..")"  
+			end
+			ret = ret .. r .."\t"
+			scope,scopeid = CurrentScope()
+		elseif scope.type=="switch" then
+			return nil,"Illegal action in switch scope in line #"..ins.linenumber.." ("..chunk..")" 
+		elseif ins.words[1].lword=="switch" then
+			switchmethod = switchmethod or decideswitchmethod()
+			local r,e = switches[switchmethod].start(ins,unknowns)
+			if not r then 
+				return nil,e.." in line #"..ins.linenumber.." ("..chunk..")" 
+			end
+			ret = ret .. " "..r.." "
 		elseif scope.type=="quickmeta" then 
 			local e = ParseQuickMeta(ins)
 			if e then return nil,e.." in line #"..ins.linenumber.." ("..chunk..")" end
@@ -2242,13 +2358,20 @@ local function Translate(chopped,chunk)
 				if scope.closure then ret = ret..scope.closure.."\t" end
 			elseif scope.type=="repeat" then
 				return nil,"Repeat scope cannot be ended with the End keyword (Line #"..ins.linenumber.." in chunk "..chunk")"
+			elseif scope.type=="case" or scope.type=="default" then
+			    local r,e = switches[switchmethod].einde(scopes[#scopes-1]) 
+				if not r then return nil,e," in line "..ins.linenumber.." ("..chunk..")" end
+				ret = ret .. r
+				scope,scopeid = CurrentScope()
 			else
+				-- print("Ending: "..scope.type..": "..scope.id.." in line #"..ins.linenumber)
 			    -- In all situations not noted above
 				ret = ret .."end"				
 			end
 			ret = ret .. " --[[endscope: "..scope.id.."; "..scope.type.." ]] "
 			_EndScope()
 			scope,scopeid = CurrentScope()
+			-- print("End: ",#scopes,scope,scopeid,"Line: "..ins.linenumber)
         elseif ins.words[1].lword=="for" then
 			if (not allowground) and scope.type=="script" then return nil,ins.words[1].word.." statement not allowed in ground scope  ("..chunk..", line #"..ins.linenumber..")" end
 			local its = {}
