@@ -18,6 +18,8 @@
 -- 3. This notice may not be removed or altered from any source distribution.
 -- </License Block>
 
+-- Debug settings
+local showtranslation = false -- When set to true, the translator will show the translation it generated... Only to be used when debugging Neil itself
 
 -- Creation of library
 local _Neil = {}
@@ -201,10 +203,22 @@ Globals = {
 		return tonumber(ret) 
 	end},
     ['EXPAND'] = {Type='delegate', Value=function (t,p)
-		assert(type(t)=="table","Table expected in Expand request (got "..type(t)..")\n"..debug.traceback())
+		assert(type(t)=="table" or type(t)=="string","Table or string expected in Expand request (got "..type(t)..")\n"..debug.traceback())
 		p = tonumber(p) or 1                                 
-		if p<#t then return t[p],Globals.EXPAND.Value(t,p+1) end  
-		if p==#t then return t[p] end      
+		if p<#t then 
+			if type(t)=="string" then
+				return t:sub(p,p),Globals.EXPAND.Value(t,p+1)   
+			else
+				return t[p],Globals.EXPAND.Value(t,p+1) 
+			end
+		end
+		if p==#t then 
+			if type(t)=="string" then
+				return t:sub(p,p),Globals.EXPAND.Value(t,p+1)   
+			else
+				return t[p] 
+			end      
+		end
 		return nil                                 
 	end, Constant=true },
 	['LUA'] = { Type='table', Value=_G, Constant=true },
@@ -2680,7 +2694,7 @@ local function Translate(chopped,chunk)
 			ret = ret..v
 		end
 	end
-	print("<translation>\n","\r"..ret.."\n</translation>") -- debug
+	if showtranslation then print("<translation>\n","\r"..ret.."\n</translation>") end -- debug
 	do
 		local unk=""
 		local uid=0
