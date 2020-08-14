@@ -30,6 +30,9 @@ _Neil.FileSystemCaseSensitive = false -- Must be set to true if directly reading
 
 local TranslationCount = 0
 
+-- For Global Defines
+local GlobalDefines = { ["SYS_LUA"] = true }
+
 -- forwards
 local DefineFunction
 
@@ -1032,15 +1035,16 @@ _Neil.MacroReplace = MacroReplace
 
 local Macros = {}
 local function Macro(script,chunk)
-	local LocalMacros = {}
+	local LocalMacros = {}	
 	local lines = _Neil.Globals.Split(script,"\n")
 	local trim = _Neil.Globals.Trim
 	local prefixed = _Neil.Globals.Prefixed
 	local ret = script
 	local rep = _Neil.MacroReplace or MacroReplace
+	local downbyif,allowelse
 	for ln,rl in ipairs(lines) do
 		local line = trim(rl)
-		-- print(ln,'"'..rl..'"','"'..line..'"')
+		-- print(ln,'"'..rl..'"','"'..line..'"')		
 		if prefixed(line:lower(),"#macro") then
 			if not prefixed(line:lower(),"#macro ") then return nil,"Macro syntax error" end
 			local chop = _Neil.Globals.Split(line," ")
@@ -2052,6 +2056,10 @@ local function Translate(chopped,chunk)
 	local regions = 0
 	local modules = {}
 	local nocatch
+	local LocalDefines = {}
+	local onmute,onif,allowelse = false,false,true
+	local prefixed = Globals.PREFIXED.Value
+	
 	
 
 	function _EndScope()
@@ -2098,7 +2106,7 @@ local function Translate(chopped,chunk)
 			ret = ret .. "\tend"
 			return
 		end
-		if not( DeclaHelp(ins.words[1].lword) or IsType(ins.words[1].word) or ins.words[1].word=="constructor" or ins.words[1].word=="destructor") then
+		if not( DeclaHelp(ins.words[1].lword) or IsType(ins.words[1].word) or ins.words[1].lword=="constructor" or ins.words[1].lword=="destructor") then
 			return "Illegal instruction"
 		end
 		local i=1
@@ -2277,6 +2285,42 @@ local function Translate(chopped,chunk)
 			if dir~="use" then ret = ret .. "-- directive: #"..dir end
 			if dir=="macro" then
 			   -- Do nothing... Macros have already been taken care off after all!
+			elseif dir=="define" then
+				for i,w in ipairs(ins.words) do
+				    if i>2 then
+						if w.kind=="comment" then break end
+						if prefixed(w.uword,"SYS_") then return nil,"SYS_ prefix reserved for system features in line #"..ins.linenumber.." ("..chunk..")" end
+						if prefixed(w.uword,"LOC_") then LocalDefines[w.uword]=true else GlobalDefines[w.uword] = true end
+					end
+				end
+			elseif dir=="undef" then
+				for i,w in ipairs(ins.words) do
+				    if i>2 then
+						if w.kind=="comment" then break end
+						if prefixed(w.uword,"SYS_") then return nil,"SYS_ prefix reserved for system features in line #"..ins.linenumber.." ("..chunk..")" end
+						if prefixed(w.uword,"LOC_") then LocalDefines[w.uword]=nil else GlobalDefines[w.uword] = nil end
+					end
+				end
+			elseif dir=="if" or dir=="elseif" or dir=="elif" then
+				if (dir=="if" and onif) or (dir~="if" and (not onif)) then return nil,"Invalid use of #"..dir.." in line #"..ins.linenumber.." ("..chunk..")" end
+				onif=true
+				allow = true
+				if allowelse then
+					for i,w in ipairs(ins.words) do 
+						if i>2 then
+							if prefixed(w.uword,"LOC_") then allow = allow and LocalDefines[w.uword] else allow = allow and GlobalDefines[w.uword] end
+							-- print("if:",i,w.uword,allow)
+						end
+					end
+					if allow and dir~="if" then allowelse=false end
+					onmute = not allow
+				end
+			elseif dir=="else" then
+				if not onif then return nil,"Invalid use of #"..dir.." in line #"..ins.linenumber.." ("..chunk..")" end
+				if allowelse then onmute=not onmute; allowelse=false end
+			elseif dir=="endif" or dir=="fi" then
+				if not onif then return nil,"Invalid use of #"..dir.." in line #"..ins.linenumber.." ("..chunk..")" end
+				onmute,onif,allowelse = false,false,true
 			elseif dir=="nocatch" or dir=="notry" then
 				if #ins.words==1 or ins.words[2].kind=="comment" then 
 					nocatch=true
@@ -2344,6 +2388,8 @@ local function Translate(chopped,chunk)
 			else
 			       return nil,"Unknown directive #"..ins.words[2].word.." in line #"..ins.linenumber.." ("..chunk..")" 
 			end
+		elseif onmute then
+			ret = ret .. "-- code muted by #if directive"
         elseif scope.classscope then -- must after the preprocessor directives be first!!!
 			local e = ClassParse(insid,ins,scope)
 			if e then return nil,e.." in line #"..ins.linenumber.." ("..chunk..")" end
