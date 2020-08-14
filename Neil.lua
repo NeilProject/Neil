@@ -1234,14 +1234,19 @@ local function Chop(script,chunk)
 		if char=="\n" then
 			newline()
 		elseif instring then
+		    -- print(char,escape,multiline)
 			if char=="\"" and (not multiline) and (not escape) then
 				instring=false
 				newword()
 			elseif char=="]" and lastchar=="]" and multiline then
 			    instring=false
 				newword()
+			elseif char=="\\" and (not escape) and (not multiline) then
+				cword().word=cword().word .. "\\"
+				escape = true
 			else
 				cword().word=cword().word .. char
+				escape = false
 			end
 		elseif incomment then
 			if multiline and char=="/" and lastchar=="*" then incomment=false end
@@ -2046,7 +2051,7 @@ local function Translate(chopped,chunk)
 	local function UnDefer()
 		local i = #scopes
 		while (not Globals.SUFFIXED.Value(scopes[i].type,"function")) and scopes[i].type~="init" do 		
-			print(scopes[i].type)
+			-- print(scopes[i].type)
 			if i<=0 or scopes[i].type=="script" then return nil,"Internal error: Can't undefer here" end
 			i = i - 1 
 		end		
