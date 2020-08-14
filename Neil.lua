@@ -1,7 +1,7 @@
 -- <License Block>
 -- Neil.lua
 -- Neil
--- version: 20.08.12
+-- version: 20.08.14
 -- Copyright (C) 2020 Jeroen P. Broks
 -- This software is provided 'as-is', without any express or implied
 -- warranty.  In no event will the authors be held liable for any damages
@@ -250,7 +250,7 @@ Globals = {
 			  return i,tab[i]
 		end 
 	end},
-	['TRIM'] = {Type='delegate', Constant=true,Value=function(str) return (Neil.Globals.ToString(str):gsub("^%s*(.-)%s*$", "%1")) end },
+	['TRIM'] = {Type='delegate', Constant=true,Value=function(str) return (_Neil.Globals.ToString(str):gsub("^%s*(.-)%s*$", "%1")) end },
 	['LEFT'] = {Type='delegate', Constant=true, Value=function(s, l) 
 			if not _Neil.Assert(type(s)=="string","String exected as first argument for 'left'") then return end
 			l = l or 1
@@ -1333,6 +1333,65 @@ local function Chop(script,chunk)
 	return chopped
 end
 
+-- Error Catching
+local ExceptLoad
+do
+	local ExceptionScript = [[ // Exception Class
+		Class Exception
+			Public ReadOnly String Message
+			Public ReadOnly String TraceBack 
+			Public ReadOnly Int Count
+			Static Int Cnt
+
+			Public Constructor(msg,tb)
+				Cnt++
+				Count = Cnt
+				Message = Msg
+			End
+		End
+	]]
+
+	local ExceptionClass
+
+	function ExceptLoad()
+		-- ExceptionClass = ExceptionClass or _Neil.Load(ExceptionScript,"Exception Class")() 
+		-- Not a good idea on second though... Let's do this differently
+		local count = 0
+		Globals.EXCEPTION = { Constant = true, Type = 'class', Value = setmetatable({},{ -- faked class!
+			["__index"] = function(s,k) if k:upper()=="COUNT" then return count else error("Unknown index") end end,
+			["__len"] = function(s) return s.COUNT end,
+			["__newinex"] = function() error("Don't modify read-only stuff!") end,
+			["__call"] = function(s,er,tb,info) 
+				local realtable = { MESSAGE=er, TRACEBACK=tb, COUNT=count, INFO=info }
+				count = count + 1
+				return setmetatable({},{
+					["__index"] = function(s,k) k = k:upper(); return realtable[k] or error("Unknown Exception member: "..k) end, -- Dirty Lua code, I tell ya!
+					["__newindex"] = function(s,k,v) error("I am NOT gonna assign "..type(v).." '"..tostring(v).."' to read-only field "..k..", I'm sorry!") end,
+					["__call"] = function(s) return s end, -- Well, I dunno...
+					["__len"] = function(s) return realtable.COUNT end
+				})
+			end -- call
+		})}
+	end
+
+	function GenInfo(max)
+		local level = 0
+		local ret = {}
+		repeat
+			level = level + 1
+			if level>(max or 1000) then break end
+			local info = debug.getinfo(level)
+			if not info then break end
+			ret[#ret+1] = info
+		until false
+		return ret
+	end
+
+	function _Neil.Catcher(e)	
+		local ret = Globals.EXCEPTION.Value(e,debug.traceback(),GenInfo(1000))
+		return ret
+	end
+end 
 
 -- Translate
 local scopes = { [0]={id="GLOBAL",type="GLOBAL",identifiers={}}}
@@ -1942,7 +2001,7 @@ end
 
 
 local function Translate(chopped,chunk)
-	local ret,scope,scopeid = NewScope("--[[ Neil Translation stareted "..os.date().."; "..os.time().." ]]\t local __neil_init_functions = {};\tlocal __neil_staticsdefined = {}","script")
+	local ret,scope,scopeid = NewScope("--[[ Neil Translation stareted "..os.date().."; "..os.time().." ]]\t local __neil_init_functions = {};\tlocal __neil_staticsdefined = {};\t","script")
 	local alwaysplua = false
 	local localplua = false
 	local pluaprefix = ""
@@ -1953,6 +2012,7 @@ local function Translate(chopped,chunk)
 	local cfor = 0
 	local regions = 0
 	local modules = {}
+	local nocatch
 	
 
 	function _EndScope()
@@ -2178,6 +2238,12 @@ local function Translate(chopped,chunk)
 			if dir~="use" then ret = ret .. "-- directive: #"..dir end
 			if dir=="macro" then
 			   -- Do nothing... Macros have already been taken care off after all!
+			elseif dir=="nocatch" or dir=="notry" then
+				if #ins.words==1 or ins.words[2].kind=="comment" then 
+					nocatch=true
+				else
+					nocath = ins.words[2].uword~="OFF" and ins.words[2].uword~="FALSE"
+				end
 			elseif dir=="mkl_lic" or dir=="mkl_version" then
 			   -- These are only for my own usage, and engines will pick those up (if they are configured to do so)
 			   -- For Neil itself, these tags have no value at all and should be ignored!
@@ -2435,6 +2501,7 @@ local function Translate(chopped,chunk)
 	            end
 			end
 		elseif ins.words[1].lword=="init" then
+		    local script
 			if scope.type~="script" then return nil,"init only allowed in ground scope" end
 			ret = ret .. " __neil_init_functions[#__neil_init_functions+1] = function()"
 			script,scope,scopeid = NewScope("","init")
@@ -2442,6 +2509,34 @@ local function Translate(chopped,chunk)
 			scope.startline = ins.linenumber
 			-- scope,scopeid = CurrentScope();		
 			ret = ret .. script
+		elseif ins.words[1].lword=="try" then
+		    if #ins.words>1 and ins.word[2].kind~="comment" then return nil,"Try needs no parameters in line "..ins.linenumber.." ("..chunk..")" end
+			if nocatch then 
+				ret = ret .. "do"
+			else
+			    ret = ret .. "local __neil_trycatch_success,__neil_trycatch_exception = xpcall(function() --[try]\t"
+			end
+			local script
+			script,scope,scopeid = NewScope("","try")
+			scope.tryline = ins.linenumber
+		elseif ins.words[1].lword=="catch" then
+			local exceptionid,script
+		    if scope.type~="try" then return nil,"Catch without Try in line "..ins.linenumber.." ("..chunk..")" end
+			if #ins.words>1 and ins.words[2].kind=="identifier" then 
+				exceptionid=ins.words[2].uword  
+			elseif #ins.words>1 and ins.words[#ins.words].kind~="comment" then 				
+				return nil,"Catch syntax error in line "..ins.linenumber.." ("..chunk..")" 
+			end
+			if nocath then
+				ret = ret .. "end if false then --[[ Catch ]] "
+			else
+				ret = ret .. "end, ".._Neil.Neil..".Catcher) if not __neil_trycatch_success then --[[ Catch ]] "
+			end
+			_EndScope()
+			script,scope,scopeid = NewScope("","catch")
+			if exceptionid then scope.identifiers[exceptionid] = "__neil_trycatch_exception" end
+		elseif ins.words[1].lword=="finally" then
+			return nil,"There is no 'finally' support yet in Neil. The word has been reserved for possible future possibilities! ("..chunk..":"..ins.linenumber..")"
 		elseif ins.words[1].lword=="end" then
 			-- print("End of scope: "..scopeid.." >> "..scope.type.." "..ins.linenumber) -- debug
 			if suffixed(scope.type,"function") or suffixed(scope.type,"method") or scope.type=="init" then				
@@ -2455,6 +2550,8 @@ local function Translate(chopped,chunk)
 				end
 				ret = ret .."end\t"
 				if scope.closure then ret = ret..scope.closure.."\t" end
+			elseif scope.type=="try" then
+				return nil,"Try("..scope.tryline..") without Catch in line "..ins.linenumber.." ("..chunk..")"
 			elseif scope.type=="repeat" then
 				return nil,"Repeat scope cannot be ended with the End keyword (Line #"..ins.linenumber.." in chunk "..chunk")"
 			elseif scope.type=="case" or scope.type=="default" then
@@ -2700,6 +2797,8 @@ end
 
 	
 -- Closure
+ExceptLoad() -- Must be last in order to make sure the translator is fully compiled now!
+
 -- return _Neil
 return setmetatable({},{
 	__index = function(s,k)
