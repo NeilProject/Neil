@@ -2567,7 +2567,7 @@ local function Translate(chopped,chunk)
 			elseif scope.type=="try" then
 				return nil,"Try("..scope.tryline..") without Catch in line "..ins.linenumber.." ("..chunk..")"
 			elseif scope.type=="repeat" then
-				return nil,"Repeat scope cannot be ended with the End keyword (Line #"..ins.linenumber.." in chunk "..chunk")"
+				return nil,"Repeat scope cannot be ended with the End keyword (Line #"..ins.linenumber.." in chunk "..chunk..")"
 			elseif scope.type=="case" or scope.type=="default" then
 				ret = switches[switchmethod].replacer(ret,scopes[#scopes-1])
 			    local r,e = switches[switchmethod].einde(scopes[#scopes-1]) 				
