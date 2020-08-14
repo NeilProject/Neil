@@ -1100,6 +1100,7 @@ local function Chop(script,chunk)
 	local right = _Neil.Globals.RIGHT
 	local instring = false
 	local incomment = false
+	local incharchain = false
 	local multiline = false
 	local escape = false
 	local hexnum = false
@@ -1248,6 +1249,18 @@ local function Chop(script,chunk)
 				cword().word=cword().word .. char
 				escape = false
 			end
+		elseif incharchain then
+		    -- print(char,escape,multiline)
+			if char=="'"  and (not escape) then
+				incharchain=false
+				newword()
+			elseif char=="\\" and (not escape) and (not multiline) then
+				escape = true
+			else
+				if Globals.TRIM.Value(cword().word)~="" then cword().word = cword().word ..", " end
+				cword().word=cword().word .. (char:byte())
+				escape = false
+			end
 		elseif incomment then
 			if multiline and char=="/" and lastchar=="*" then incomment=false end
 		elseif char==" " or char=="\t" or char =="\r" then -- Ignore whitespaces... With apologies to the developers of the WhiteSpace programming language who thought these characters are valuable :-P
@@ -1282,6 +1295,11 @@ local function Chop(script,chunk)
 			multiline=false
 			if cword().word~="" then newword() end
 			cword().kind="string"
+		elseif char=="'" then
+			incharchain=true
+			multiline=false
+			if cword().word~="" then newword() end
+			cword().kind="character chain"
 		elseif (cword().kind=="member" or cword().kind=="method") and ( (uasc>=65 and uasc<=90) or char=="_" or (((uasc>=48 and uasc<=57) or char=="." or char==":") and #(cword().word)>0) ) then
 			cword().word = cword().word .. char
 			--print('mem')
@@ -1535,6 +1553,8 @@ local function LitTrans(ins,pos,endword,unk,unknownprefix)
 		   else
 		      ret = ret .. " "..word.word.." "
 		   end
+		elseif word.kind=="character chain" then
+			ret = ret .. " "..word.word.." "
 		elseif word.lword == "new" then
 			TriggerNew = 2
 		elseif word.lword == "div" then
