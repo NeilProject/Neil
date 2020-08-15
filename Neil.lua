@@ -19,7 +19,7 @@
 -- </License Block>
 
 -- Debug settings
-local showtranslation = false -- When set to true, the translator will show the translation it generated... Only to be used when debugging Neil itself
+local showtranslation = true -- When set to true, the translator will show the translation it generated... Only to be used when debugging Neil itself
 
 -- Creation of library
 local _Neil = {}
@@ -1542,10 +1542,11 @@ local function GetWith()
 	return _Neil.Neil..".Globals"
 end
 
-local function LitTrans(alwaysplua, pluaprefixins,pos,endword,unk,unknownprefix)
+local function LitTrans(alwaysplua, pluaprefix, ins,pos,endword,unk,unknownprefix)
 	local fendword
 	local ret = ""
 	local TriggerNew = 0
+	-- print(debug.traceback())
 	for i=pos,#ins.words do
 		local word = ins.words[i]
 		if endword==word.lword then fendword = true break end
@@ -1830,7 +1831,7 @@ local function Declaration(ins,scope,alwaysplua,pluaprefix,localplua)
 			ret = ret .. DefineDelegate()
 		else
 			-- print(i,i+2)
-			ret = ret .. LitTrans(alwaysplua, pluaprefixins,i+2,nil,{}) -- must be taken care of later!
+			ret = ret .. LitTrans(alwaysplua, pluaprefix, ins,i+2,nil,{}) -- must be taken care of later!
 		end
 		if isglobal=="static" then ret = ret .. " end " end
 	elseif ins.words[i+1].word=="(" then
@@ -1850,7 +1851,7 @@ local function NewConditionScope(stype,ins,unk)
 	-- endword is only experimental. I am not sure if this will eventually make it in the end product
 	local endword
 	if stype=="if" or stype=="elseif" then endword="then" elseif stype=="while" then endword="do" else return nil,"Internal error! Unknown Condition scope: "..stype end 
-	local res,err,fendword = LitTrans(alwaysplua, pluaprefixins,2,endword,unk)
+	local res,err,fendword = LitTrans(alwaysplua, pluaprefix, ins,2,endword,unk)
 	local ns_s = NewScope("",stype)	 
 	return res,ns_s,err
 end
@@ -1884,7 +1885,7 @@ function switches.oud.start(ins,unk)
 	scope.countcases = 0
 	scope.casecheck = "switch_check_var_"..scopeid.."_value"
 	scope.casestyle = "oud"
-	local scr,err = LitTrans(alwaysplua, pluaprefixins,2,nil,unk)
+	local scr,err = LitTrans(alwaysplua, pluaprefix,ins,2,nil,unk)
 	if not scr then return nil,"Switch syntax error: "..err end
 	ret = ret .. " local "..scope.casecheck.." = "..scr.."\t"
 	return ret,"Ok"
@@ -1954,7 +1955,7 @@ function switches.nieuw.start(ins,unk)
 	scope.countcases = 0
 	scope.casecheck = "switch_check_var_"..scope.id.."_value"
 	scope.casestyle = "nieuw"
-	local scr,err = LitTrans(alwaysplua, pluaprefixins,2,nil,unk)
+	local scr,err = LitTrans(alwaysplua, pluaprefix,ins,2,nil,unk)
 	if not scr then return nil,"Switch syntax error: "..err end
 	ret = ret .. "do "..script.." local "..scope.casecheck.." = "..scr.."\t ***SWITCHREMOVE:"..scope.id.."*** end"
 	scope.replacer = ""
@@ -2228,7 +2229,7 @@ local function Translate(chopped,chunk)
 			scope.identifiers[identifier:upper()] = "self."..identifier
 		elseif ins.words[i+1].word == "=" then
 			if istype=="void" then return "Void type only allowed for functions and methods" end
-			local value,err = LitTrans(alwaysplua, pluaprefixins,i+2,nil,unknown) -- (ins,pos,endword,unk,unknownprefix)
+			local value,err = LitTrans(alwaysplua, pluaprefix, ins,i+2,nil,unknown) -- (ins,pos,endword,unk,unknownprefix)
 			if not value then return err end
 			ret = ret .. string.format("\t".. _Neil.Neil..".Class.NewMember(%s,\"%s\", \"%s\", \"%s\", \"%s\", \"%s\", %s,    %s )",cl_private,scope.classname,istype,identifier,isglobal,rw,isstatic,value)
 			scope.identifiers[identifier:upper()] = "self."..identifier
@@ -2463,7 +2464,7 @@ local function Translate(chopped,chunk)
 			if ins.words[2].kind~="identifier" then return nil,"Unexpected "..ins.words[2].kind.." ("..ins.words[2].word..") in defer ("..chunk..":"..ins.linenumber..")" end
 			if #ins.words>2 then
 				if ins.words[3].word~="(" then return nil,"Invalid defer request ("..ins.words[2].word..") in defer ("..chunk..":"..ins.linenumber..")" end
-				para,err = LitTrans(alwaysplua, pluaprefixins,4,nil,unknowns)				
+				para,err = LitTrans(alwaysplua, pluaprefix, ins,4,nil,unknowns)				
 				if ins.words[#ins.words].word~=")" then return nil,"Invalid defer request closure ("..ins.words[2].word..") in defer ("..chunk..":"..ins.linenumber..")" end
 				para = Globals.TRIM.Value(para)
 				para = Globals.LEFT.Value(para,#para-1)
@@ -2555,7 +2556,7 @@ local function Translate(chopped,chunk)
 				for _,w in pairs(ins.words) do
 					if w.kind=="comment" then return nil,"No comments allowed in returns in the ground scope ("..chunk..":"..ins.linenumber..")" end
 				end	
-				local a,e = LitTrans(alwaysplua, pluaprefixins,2,nil,unknowns)
+				local a,e = LitTrans(alwaysplua, pluaprefix,ins,2,nil,unknowns)
 				if not a then return nil,"Ground scope return error: "..e.." in line #"..ins.linenumber.." ("..chunk..")" end
 				modules[#modules+1]=a
 				ret = ret .. "-- delayed to end: "
@@ -2575,11 +2576,11 @@ local function Translate(chopped,chunk)
 					ret = ret .. ud.."\treturn;"
 					fscope.returned = true
 				elseif ftype=="plua" or ftype=="var" then
-					local expression,error = LitTrans(alwaysplua, pluaprefixins,2,nil,unknowns)
+					local expression,error = LitTrans(alwaysplua, pluaprefix,ins,2,nil,unknowns)
 					if not expression then return nil,error.." in line "..ins.linenumber.." ("..chunk..")" end
 					ret = ret .. ud .."\treturn "..expression
 				else
-					local expression,error = LitTrans(alwaysplua, pluaprefixins,2,nil,unknowns)
+					local expression,error = LitTrans(alwaysplua, pluaprefix,ins,2,nil,unknowns)
 					if not expression then return nil,error.." in line "..ins.linenumber.." ("..chunk..")" end
 					ret = ret .. "return ".._Neil.Neil..".Globals.ConvType("..expression..",'"..ftype.."','return value',false)"
 					fscope.returned = true
@@ -2668,7 +2669,7 @@ local function Translate(chopped,chunk)
 				elseif ins.words[i].word == "," then -- Nothing
 				else return nil,"Unexpected "..ins.words[i].kind.." ("..ins.words[i].word..") in for-loop syntax ("..chunk..", line #"..ins.linenumber..")" end
 			until false
-			local s,e = LitTrans(alwaysplua, pluaprefixins,i+1,nil,unknowns)
+			local s,e = LitTrans(alwaysplua, pluaprefix, ins,i+1,nil,unknowns)
 			if not s then return s,e.."("..chunk..", line #"..ins.linenumber..")" end
 			ret = ret .."for "
 			for i,it in ipairs(its) do
@@ -2685,14 +2686,14 @@ local function Translate(chopped,chunk)
 			ret = ret .. "repeat\t"..script
 		elseif ins.words[1].lword=="until" then
 			if scope.type~="repeat" then return nil,"Until without Repeat in line #"..ins.linenumber.." ("..chunk..")" end
-			local scr,err = LitTrans(alwaysplua, pluaprefixins,2,nil,unknowns)
+			local scr,err = LitTrans(alwaysplua, pluaprefix, ins,2,nil,unknowns)
 			if not scr then return s,err.."("..chunk..", line #"..ins.linenumber..")" end
 			ret = ret .. "until "..scr.."\t"
 			_EndScope()
 			scope,scopeid = CurrentScope()
 		elseif ins.words[1].lword=="loopwhile" then
 			if scope.type~="repeat" then return nil,"LoopWhile without Repeat in line #"..ins.linenumber.." ("..chunk..")" end
-			local scr,err = LitTrans(alwaysplua, pluaprefixins,2,nil,unknowns)
+			local scr,err = LitTrans(alwaysplua, pluaprefix,ins,2,nil,unknowns)
 			if not scr then return s,err.."("..chunk..", line #"..ins.linenumber..")" end
 			ret = ret .. "until not("..scr..")\t"
 			_EndScope()
@@ -2703,23 +2704,23 @@ local function Translate(chopped,chunk)
 			_EndScope()
 			scope,scopeid = CurrentScope()
 		elseif ins.kind=="decrement" then
-		    local s,e = LitTrans(alwaysplua, pluaprefixins,1,nil,unknowns)
+		    local s,e = LitTrans(alwaysplua, pluaprefix,ins,1,nil,unknowns)
 			if not s then return s,e.."("..chunk..", line #"..ins.linenumber..")" end
 			ret = ret .. s .. " = " .. _Neil.Neil..".Dec(" ..s..") "
 		elseif ins.kind=="increment" then
-		    local s,e = LitTrans(alwaysplua, pluaprefixins,1,nil,unknowns)
+		    local s,e = LitTrans(alwaysplua, pluaprefix,ins,1,nil,unknowns)
 			if not s then return s,e.."("..chunk..", line #"..ins.linenumber..")" end
 			ret = ret .. s .. " = " .. _Neil.Neil..".Inc(" ..s..") "
         elseif ins.kind=="add" then
 		    local ains = { words = ins.define }
-			local dw,de = LitTrans(alwaysplua, pluaprefixains,1,nil,unknowns); if not dw then return nil,de.."("..chunk..", line #"..ins.linenumber..")" end
-			local vw,ve = LitTrans(alwaysplua, pluaprefix ins,1,nil,unknowns); if not vw then return nil,ve.."("..chunk..", line #"..ins.linenumber..")" end
+			local dw,de = LitTrans(alwaysplua, pluaprefix, ains,1,nil,unknowns); if not dw then return nil,de.."("..chunk..", line #"..ins.linenumber..")" end
+			local vw,ve = LitTrans(alwaysplua, pluaprefix, ins,1,nil,unknowns); if not vw then return nil,ve.."("..chunk..", line #"..ins.linenumber..")" end
 			ret = ret .. dw .. " = ".. _Neil.Neil..".Add("..dw..", "..vw..")"
 		elseif ins.words[1].word=="with" then
 			local script
 			script,scope,scopeid = NewScope("","with")
 			ret = ret .."do "..script
-			local dw,de = LitTrans(alwaysplua, pluaprefixins,2,unknowns); if not dw then return nil,de.."("..chunk..", line #"..ins.linenumber..")" end
+			local dw,de = LitTrans(alwaysplua, pluaprefix,ins,2,unknowns); if not dw then return nil,de.."("..chunk..", line #"..ins.linenumber..")" end
 			ret = ret .."\t local with_"..scopeid.." = "..dw
 			scope.with = "with_"..scopeid
 			print("with "..scope.with.." <= "..dw)
@@ -2730,7 +2731,7 @@ local function Translate(chopped,chunk)
 			    -- print(Serialize("Forbidden instruction",ins))
 				return nil,"Instruction not allowed in ground scope ("..chunk..", line #"..ins.linenumber..")" 
 		   end
-		   local result,error = LitTrans(alwaysplua, pluaprefixins,1,nil,unknowns,ins)
+		   local result,error = LitTrans(alwaysplua, pluaprefix,ins,1,nil,unknowns,ins)
 		   if not result then return nil,error.." in line "..ins.linenumber.." ("..chunk..")" end
 		   ret = ret .. result
 		  --  error("Identifier from start processing not yet implemented")
