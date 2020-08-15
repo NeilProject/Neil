@@ -1839,9 +1839,15 @@ local function Declaration(ins,scope,alwaysplua,pluaprefix,localplua)
 		if rw~="readwrite" then return nil,"Read-Write permissions cannot be altered in general function definition" end
 		local data,error = DefineFunction(ins,i+2,istype)
 		if not data then return nil,error end
-		ret = ret .. scope.id.."_locals['.converttofunction']( '"..identifier.."', ".. data
-		-- return nil,"No functions yet"
-		scopes[#scopes].closure=")"
+		if alwaysplua then
+			ret = ret .. name .." = " ..data
+			scope.closure="\t--[[End PLUA function]]"
+		else
+			ret = ret .. scope.id.."_locals['.converttofunction']( '"..identifier.."', ".. data
+			scope.haslocals = true
+			-- return nil,"No functions yet"
+			scopes[#scopes].closure=")"
+		end
 	end
 	-- return nil,"Nothing yet, but from here things SHOULD be okay ("..istype..","..identifier..")"
 	return ret,"Ok!"
