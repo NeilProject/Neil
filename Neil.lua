@@ -19,7 +19,7 @@
 -- </License Block>
 
 -- Debug settings
-local showtranslation = true -- When set to true, the translator will show the translation it generated... Only to be used when debugging Neil itself
+local showtranslation = false -- When set to true, the translator will show the translation it generated... Only to be used when debugging Neil itself
 
 -- Creation of library
 local _Neil = {}
@@ -152,6 +152,7 @@ do local kk
           return v
        end,   
 	   ['var'] = function(v) return v end,
+	   ['plua'] = function(v) return v end,
 	   ['QuickMeta_group'] = function(v) return v end,
        ['string'] = function(v)
           if type(v)=="nil" then
@@ -178,7 +179,7 @@ do local kk
   return CTCase[wanttype](v)
 end end
 
-
+_Neil.ConvType = ConvType
 
 -- Error
 function _Neil.Error(a)
@@ -1547,6 +1548,7 @@ local function LitTrans(alwaysplua, pluaprefix, ins,pos,endword,unk,unknownprefi
 	local ret = ""
 	local TriggerNew = 0
 	-- print(debug.traceback())
+	-- print("LitTrans:",alwaysplua, pluaprefix,ins.linenumber)
 	for i=pos,#ins.words do
 		local word = ins.words[i]
 		if endword==word.lword then fendword = true break end
@@ -1568,7 +1570,7 @@ local function LitTrans(alwaysplua, pluaprefix, ins,pos,endword,unk,unknownprefi
 		elseif IsType(word.word) and (TriggerNew<=0) then
 			if i>=#ins.words or ins.words[i+1].kind=="comment" then return nil,"Delegate expected" end
 			if ins.words[i+1].word~="(" then return nil,"Delegate expects function parameters" end
-			local f,err = DefineFunction(ins,i+2,word.word) --,alwaysplua,pluaprefix,needself)
+			local f,err = DefineFunction(ins,i+2,word.word,alwaysplua,pluaprefix) --,alwaysplua,pluaprefix,needself)
 			if not f then return nil,"Delegate error: "..e end
 			ret = ret .. f
 			break
@@ -1604,6 +1606,7 @@ local function LitTrans(alwaysplua, pluaprefix, ins,pos,endword,unk,unknownprefi
 end
 
 function DefineFunction(instruction,startword,returntype,alwaysplua,pluaprefix,needself)
+	-- print("DefineFunction(", instruction,startword,returntype,"alwaysplua:"..tostring(alwaysplua),pluaprefix,needself,")")
 	local funcform = "function ("
 	local startcheck = ""
 	local params = {}
@@ -1662,10 +1665,18 @@ function DefineFunction(instruction,startword,returntype,alwaysplua,pluaprefix,n
 			else
 				startcheck = startcheck .. "local "..pluaprefix..param.name
 			end
-			if param.default then 
-				startcheck = startcheck .. " = neil_function_arg"..i.." or "..param.default 
+			if param.type~="plua" then
+				if param.default then 
+					startcheck = startcheck .. " = ".._Neil.Neil..".ConvType(neil_function_arg"..i.." or "..param.default ..", \""..param.type.."\", \"function argument "..i.."\")"
+				else
+					startcheck = startcheck .. " = ".._Neil.Neil..".ConvType(neil_function_arg"..i                        ..", \""..param.type.."\", \"function argument "..i.."\")"
+				end			
 			else
-				startcheck = startcheck .. " = neil_function_arg"..i
+				if param.default then 
+					startcheck = startcheck .. " = neil_function_arg"..i.." or "..param.default 
+				else
+					startcheck = startcheck .. " = neil_function_arg"..i
+				end
 			end
 			startcheck = startcheck .."; "
 			if param.noprefix then
@@ -1837,10 +1848,11 @@ local function Declaration(ins,scope,alwaysplua,pluaprefix,localplua)
 	elseif ins.words[i+1].word=="(" then
 	    if isglobal=="static" then return nil,"Static cannot be used for function defintions" end
 		if rw~="readwrite" then return nil,"Read-Write permissions cannot be altered in general function definition" end
-		local data,error = DefineFunction(ins,i+2,istype)
+		local data,error = DefineFunction(ins,i+2,istype,alwaysplua,pluaprefix)
 		if not data then return nil,error end
 		if alwaysplua then
-			ret = ret .. name .." = " ..data
+			ret = ret .. name .." = " ..
+			data
 			scope.closure="\t--[[End PLUA function]]"
 		else
 			ret = ret .. scope.id.."_locals['.converttofunction']( '"..identifier.."', ".. data
@@ -2140,7 +2152,7 @@ local function Translate(chopped,chunk)
 				if ins.words[i+2]~=")" and (isstatic or dtype=="destructor") then
 					return "Destructors and static constructors do not take parameters" 
 				end
-				local f,e = DefineFunction(ins,i+2,istype,false,false,true)
+				local f,e = DefineFunction(ins,i+2,istype,alwaysplua,pluaprefix,true)
 				ret = ret .. string.format("\t".. _Neil.Neil..".Class.NewMethod(%s,\"%s\", \"%s\", \"%s\", \"%s\", \"%s\", %s,    %s ",cl_private,scope.classname,istype,dtype,isglobal,rw,isstatic,f)
 				local s,sid = CurrentScope()
 				s.closure=")"
@@ -2241,7 +2253,7 @@ local function Translate(chopped,chunk)
 			scope.identifiers[identifier:upper()] = "self."..identifier
 	    elseif ins.words[i+1].word =="(" then
 			scope.identifiers[identifier:upper()] = "self."..identifier
-			local func,error = DefineFunction(ins,i+2,istype,false,false,true)
+			local func,error = DefineFunction(ins,i+2,istype,false,false,true,alwaysplua,pluaprefix)
 			if not func then return error end
 			ret = ret .. string.format("\t".. _Neil.Neil..".Class.NewMethod(%s,\"%s\", \"%s\", \"%s\", \"%s\", \"%s\", %s,    %s ",cl_private,scope.classname,istype,identifier,isglobal,rw,isstatic,func)
 			scopes[#scopes].closure=")"
@@ -2737,7 +2749,7 @@ local function Translate(chopped,chunk)
 			    -- print(Serialize("Forbidden instruction",ins))
 				return nil,"Instruction not allowed in ground scope ("..chunk..", line #"..ins.linenumber..")" 
 		   end
-		   local result,error = LitTrans(alwaysplua, pluaprefix,ins,1,nil,unknowns,ins)
+		   local result,error = LitTrans(alwaysplua or localplua, pluaprefix,ins,1,nil,unknowns,ins)
 		   if not result then return nil,error.." in line "..ins.linenumber.." ("..chunk..")" end
 		   ret = ret .. result
 		  --  error("Identifier from start processing not yet implemented")
