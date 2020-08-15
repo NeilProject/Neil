@@ -1,0 +1,5 @@
+Void MakeHelloWorld()
+	Print("Hello World!")
+End
+
+Return MakeHelloWorld
