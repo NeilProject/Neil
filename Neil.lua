@@ -19,7 +19,7 @@
 -- </License Block>
 
 -- Debug settings
-local showtranslation = false -- When set to true, the translator will show the translation it generated... Only to be used when debugging Neil itself
+local showtranslation = true -- When set to true, the translator will show the translation it generated... Only to be used when debugging Neil itself
 
 -- Creation of library
 local _Neil = {}
@@ -54,7 +54,8 @@ local keywords = { "void","int","byte","number","bool","boolean","delegate","fun
 				   "return", -- We need that one, don't we?
 				   "true", "false", -- The two boolean values
 				   "nil", "null", -- "null" will be replaced by "nil"
-				   "init","defer","div","var","break","amd","or","not"
+				   "init","defer","div","var","break","amd","or","not",
+				   "import","export"
 
 }
 
@@ -2699,6 +2700,31 @@ local function Translate(chopped,chunk)
 			script,scope,scopeid = NewScope("","for-loop")
 			ret = ret .. script
 			for _,it in ipairs(its) do scope.identifiers[it:upper()] = it end
+		elseif ins.words[1].lword=="import" then
+			if #ins.words<=1 or ins.words[2].kind=="comment" then return nil,"Import what? in line #"..ins.linenumber.." ("..chunk..")" end
+			if ins.words[3] and ins.words[3].kind=="comment" then ins.words[3] = nil end
+			if ins.words[4] and ins.words[3].kind=="comment" then ins.words[4] = nil end
+			local iword,xword = ins.words[2],ins.words[3] or ins.words[2]
+			if ins.words[2].lword == "global" then
+				iword,xword = ins.words[3],ins.words[4] or ins.words[3]
+				if iword.kind~="identifier" then return nil,"Global identifier to import to expected in line #"..ins.linenumber.." ("..chunk..")" end
+				if not iword then return nil,"Import global what? in line #"..ins.linenumber.." ("..chunk..")" end				
+				if Globals[iword.uword] then return nil,"Import Global tries to create a duplicate identifier in line #"..ins.linenumber.." ("..chunk..")" end
+				if keywords[iword.lword] then return nil,'"'..iword.word..'" is a keyword in line #'..ins.linenumber.." ("..chunk..")" end
+				Globals[iword.uword] = {Type="plua", PLua=xword.word }
+			else
+				if iword.kind~="identifier" then return nil,"Identifier to import to expected in line #"..ins.linenumber.." ("..chunk..")" end
+				if scope.identifiers[iword.uword] then return nil,"Import tries to create a duplicate identifier in line #"..ins.linenumber.." ("..chunk..")" end
+				scope.identifiers[iword.uword] = xword.word
+			end
+			ret = ret .. "--[[ import request here ]] "
+		elseif ins.words[1].lword=="export" then
+			if #ins.words<=1 or ins.words[2].kind=="comment" then return nil,"Emport what? in line #"..ins.linenumber.." ("..chunk..")" end
+			if ins.words[3] and ins.words[3].kind=="comment" then ins.words[3] = nil end
+			local iword,xword = ins.words[2],ins.words[3] or ins.words[2]
+			if iword.kind~="identifier" then return nil,"Identifier to export expected in line #"..ins.linenumber.." ("..chunk..")" end
+			local id = GetIdentifier(iword.word,unknowns) 			
+			ret = ret .. xword.word .. " = "..id.." --[[ EXPORT "..id.." ]]\t"
 		elseif ins.words[1].lword=="repeat" then
 			script,scope,scopeid = NewScope("","repeat")
 			ret = ret .. "repeat\t"..script
@@ -2784,7 +2810,7 @@ local function Translate(chopped,chunk)
 			ret = ret..v
 		end
 	end
-	if showtranslation then print("<translation>\n","\r"..ret.."\n</translation>") end -- debug
+	if showtranslation then print("<translation Chunk=\""..chunk.."\">\n","\r"..ret.."\n</translation>") end -- debug
 	do
 		local unk=""
 		local uid=0
