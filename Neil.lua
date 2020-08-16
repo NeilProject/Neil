@@ -1,7 +1,7 @@
 -- <License Block>
 -- Neil.lua
 -- Neil
--- version: 20.08.15
+-- version: 20.08.16
 -- Copyright (C) 2020 Jeroen P. Broks
 -- This software is provided 'as-is', without any express or implied
 -- warranty.  In no event will the authors be held liable for any damages
@@ -19,7 +19,7 @@
 -- </License Block>
 
 -- Debug settings
-local showtranslation = true -- When set to true, the translator will show the translation it generated... Only to be used when debugging Neil itself
+local showtranslation = false -- When set to true, the translator will show the translation it generated... Only to be used when debugging Neil itself
 
 -- Creation of library
 local _Neil = {}
@@ -149,7 +149,7 @@ do local kk
           return v
          end,
        ['delegate'] = function(v)
-          _Neil.Assert(type(v)=="function or v==nil","Delegate required"..kk)
+          _Neil.Assert(type(v)=="function" or v==nil,"Delegate required"..kk)
           return v
        end,   
 	   ['var'] = function(v) return v end,
@@ -231,7 +231,7 @@ Globals = {
 	["CHR"] = { Type='delegate', Value=string.char, Constant=true },
 	['ASSERT'] = {Type=='delegate', Value=_Neil.Assert, Constant=true },
 	['GLOBALDUMP'] = { Type='delegate', Constant=true, Value=function() local ret="" for k,v in pairs(Globals) do ret = ret .. k .. " = "..tostring(v) end end },
-	['GLOBALEXISTS'] = {Type='delegate', Constant=true, value=function(n) 
+	['GLOBALEXISTS'] = {Type='delegate', Constant=true, Value=function(n) 
 		_Neil.Assert(type(n)=="string","Global exists expects a string. Not a "..type(n))
 		n = n:upper()
 		local g = Globals[n]
@@ -390,6 +390,7 @@ _Neil.Globals = setmetatable({},{
           _Neil.Assert(not want.Constant,k.." is a constant and cannot be overwritten")
           _Neil.Assert((not want.ReadOnly) or (ReadOnlyWrite.Globals),k.." is read-only and cannot be overwritten")
           Globals[uk].Value = ConvType(v,Globals[uk].Type,k)
+		  --print("Defined global ",uk," with ",v," became ",ConvType(v,Globals[uk].Type,k))
 		  if want.UndefinedConstant then
 			 want.Constant = true
 			 want.UndefinedConstant = nil
@@ -419,11 +420,12 @@ _Neil.Globals = setmetatable({},{
         end
 })
 
+
 -- Locals
 
 local function LocalToFunction(table,key,func)
 	local want	
-	want            = table[key:upper()]; assert(want,"INTERNAL ERROR!\nlocal table finding error >> "..key)
+	want            = table[key:upper()]; assert(want,"INTERNAL ERROR!\nlocal table finding error >> '"..key.."'\n\n")
 	want.Value      = func
 	want.ReturnType = want.Type
 	want.Type       = 'delegate'
@@ -1289,7 +1291,7 @@ local function Chop(script,chunk)
 			end
 		elseif char==";" then
 			local directive
-			for i,v in ipairs(instruction[#instructions].words) do
+			for i,v in ipairs(instruction[#instruction].words) do
 				if v.kind~="" then					
 					directive = v.word=="#"
 					break
@@ -1484,9 +1486,12 @@ local function EndScope(script)
 end
 
 local function DeclaHelp(w)
+    --print('Test',w)
 	for _,ww in ipairs( declasupport ) do 
 		--print("Declahelp: ",w,ww)
+		-- print("is",w,ww,"?","","=>",w==w)
 		if ww==w then 
+			-- print("returned true")
 			return true 
 		end 
 	end
@@ -1568,6 +1573,8 @@ local function LitTrans(alwaysplua, pluaprefix, ins,pos,endword,unk,unknownprefi
 		elseif word.lword == "div" then
 			if Globals.LUAVERSION.Value()<5.2 then return nil,"The 'div' keyword's translation requires Lua 5.2 or higher" end
 			ret = ret .. " // " -- Sorry, folks, but I decided to stick with the C method for commenting. This keyword can back this up, and beside you still have floor function
+        elseif word.kind == "string" then
+		   ret = ret .. ' "'..word.word..'" '
 		elseif IsType(word.word) and (TriggerNew<=0) then
 			if i>=#ins.words or ins.words[i+1].kind=="comment" then return nil,"Delegate expected" end
 			if ins.words[i+1].word~="(" then return nil,"Delegate expects function parameters" end
@@ -1587,8 +1594,6 @@ local function LitTrans(alwaysplua, pluaprefix, ins,pos,endword,unk,unknownprefi
 			ret = ret .."."..word.word
 		elseif word.kind == "method" then
 			ret = ret ..":"..word.word
-        elseif word.kind == "string" then
-		   ret = ret .. ' "'..word.word..'" '
 		elseif (word.word == "$" or word.word=="$$") and word.kind~="string" then
 			ret = ret .. GetWith()
 		elseif word.kind == "number" then
@@ -1711,7 +1716,7 @@ local function Declaration(ins,scope,alwaysplua,pluaprefix,localplua)
 	local initvalue = "nil"
 	local istype
 	local ret = ""
-	local realtype
+	local realtype	
 	localplua = localplua and scope.kind~="script"
 	alwaysplua = alwaysplua or localplua
 	-- decladata
@@ -1799,6 +1804,7 @@ local function Declaration(ins,scope,alwaysplua,pluaprefix,localplua)
 		else
 			name = _Neil.Neil..".Globals."..identifier
 		end
+		ret = ret .. " --[[ Global "..identifier.." created]]\t"
 	else -- In all other situations, I guess it's a local we got!
 		if istype=="plua" then
 			name = pluaprefix..identifier
@@ -1856,10 +1862,20 @@ local function Declaration(ins,scope,alwaysplua,pluaprefix,localplua)
 			data
 			scope.closure="\t--[[End PLUA function]]"
 		else
-			ret = ret .. scope.id.."_locals['.converttofunction']( '"..identifier.."', ".. data
+			if isglobal=="global" then
+			    local uk = identifier:upper()
+				local what = Globals[uk]
+				what.Type="delegate"
+				what.ReturnType=istype
+				what.UndefinedConstant=true
+			    ret = ret .. _Neil.Neil..".Globals."..identifier.." = "..data
+				scopes[#scopes].closure = "--[[ End global function: "..identifier.."]] "
+			else
+				ret = ret .. scope.id.."_locals['.converttofunction']( '"..identifier.."', ".. data
+				scopes[#scopes].closure=")"
+			end
 			scope.haslocals = true
 			-- return nil,"No functions yet"
-			scopes[#scopes].closure=")"
 		end
 	end
 	-- return nil,"Nothing yet, but from here things SHOULD be okay ("..istype..","..identifier..")"
@@ -2472,7 +2488,7 @@ local function Translate(chopped,chunk)
 			else
 				ret = ret .. _Neil.Neil..".Class.Create(\""..classname.."\", false)" -- name,private,extend
 			end
-		elseif DeclaHelp(ins.words[1].lword) or IsType(ins.words[1].word) then
+		elseif (DeclaHelp(ins.words[1].lword) or IsType(ins.words[1].word)) and ins.kind~="pure" then
 			local success,err = Declaration(ins,scope,alwaysplua,pluaprefix,localplua)
 			if not success then return nil,err.." in line "..ins.linenumber.." ("..chunk..")" end
 			scope,scopeid = CurrentScope() -- Since functions can be define here, this is important!
@@ -2619,11 +2635,12 @@ local function Translate(chopped,chunk)
 			if nocatch then 
 				ret = ret .. "do"
 			else
-			    ret = ret .. "local __neil_trycatch_success,__neil_trycatch_exception = xpcall(function() --[try]\t"
+			    ret = ret .. "local __neil_trycatch_success,__neil_trycatch_exception = xpcall(function() --[[try]]\t"
 			end
 			local script
 			script,scope,scopeid = NewScope("","try")
 			scope.tryline = ins.linenumber
+			ret = ret .." "..script.."\t"
 		elseif ins.words[1].lword=="catch" then
 			local exceptionid,script
 		    if scope.type~="try" then return nil,"Catch without Try in line "..ins.linenumber.." ("..chunk..")" end
@@ -2640,6 +2657,7 @@ local function Translate(chopped,chunk)
 			_EndScope()
 			script,scope,scopeid = NewScope("","catch")
 			if exceptionid then scope.identifiers[exceptionid] = "__neil_trycatch_exception" end
+			ret = ret .." "..script.."\t"
 		elseif ins.words[1].lword=="finally" then
 			return nil,"There is no 'finally' support yet in Neil. The word has been reserved for possible future possibilities! ("..chunk..":"..ins.linenumber..")"
 		elseif ins.words[1].lword=="end" then
@@ -2928,6 +2946,17 @@ end
 	
 -- Closure
 ExceptLoad() -- Must be last in order to make sure the translator is fully compiled now!
+
+function _Neil.DumpGlobals() -- FOR DEBUG PURPOSES ONLY!!!
+    for k,v in Globals.SPAIRS.Value(Globals) do
+		if k=="LUA" then
+		   print("LUA = _G -- Hands off!");
+		else
+			print(Serialize("Global "..k,v))
+		end
+	end
+end
+
 
 -- return _Neil
 return setmetatable({},{
