@@ -2936,7 +2936,7 @@ local function Translate(chopped,chunk)
 		   return nil,unk
 	    end
 	end	    
-	print(ret)
+	--print(ret)
 	return ret,"Ok"
 end
 
