@@ -62,7 +62,7 @@ local keywords = { "void","int","byte","number","bool","boolean","delegate","fun
 }
 
 local declasupport = {"global","public","private","final","abstract", "get", "set", "local","static","const", "readonly" }
-local types = {"void","int","string","bool","boolean","delegate","function","userdata","number","table","plua","var"}
+local types = {"void","int","string","bool","boolean","delegate","function","userdata","number","table","plua","var","byte"}
 
 local quickmetaparameters = {
 	   index = "self, key",
@@ -1163,44 +1163,48 @@ local function Chop(script,chunk)
 		if ins.kind and ins.kind~="" then return end -- No need to waste time on an instruction already identified
 		local definition
 		for _,w in ipairs(ins.words) do
-			if w.word=="(" then 
-				haakjes = haakjes + 1
-			elseif w.word==")" then
-				haakjes = haakjes - 1
-			end
-			if w.word=="++" then
-				if not _Neil.Assert(not definition,"Syntax error in line #"..ins.linenumber) then return end
-				definition = "increment"
-			elseif w.word=="--" then
-				if not _Neil.Assert(not definition,"Syntax error in line #"..ins.linenumber) then return end
-				definition = "decrement"
-			elseif w.kind~="" then 
+			if w.kind~="string" then
+				if w.word=="(" then 
+					haakjes = haakjes + 1
+				elseif w.word==")" then
+					haakjes = haakjes - 1
+				end
+				if w.word=="++" then
+					if not _Neil.Assert(not definition,"Syntax error in line #"..ins.linenumber) then return end
+					definition = "increment"
+				elseif w.word=="--" then
+					if not _Neil.Assert(not definition,"Syntax error in line #"..ins.linenumber) then return end
+					definition = "decrement"
+				elseif w.kind~="" then 
+					clean[#clean+1] = w 
+				end
+				--if w.word=="=" and haakjes<=0 then 
+				--	if not _Neil.Assert(not definition,"Syntax error in line #"..ins.linenumber) then return end
+				--	ins.define = clean
+				--	clean = {}
+				--	definition = "definition"
+				--[[else]]if w.word == "+=" then
+					if not _Neil.Assert(not definition,"Syntax error in line #"..ins.linenumber) then return end
+					ins.define = clean
+					ins.define[#ins.define] = nil
+					clean = {}
+					definition = "add"
+				elseif w.word == "-=" then
+					if not _Neil.Assert(not definition,"Syntax error in line #"..ins.linenumber) then return end
+					ins.define = clean
+					ins.define[#ins.define] = nil
+					--ins.define = clean
+					clean = {}
+					definition = "subtract"
+				end
+			elseif w.kind~="" then
 				clean[#clean+1] = w 
-			end
-			--if w.word=="=" and haakjes<=0 then 
-			--	if not _Neil.Assert(not definition,"Syntax error in line #"..ins.linenumber) then return end
-			--	ins.define = clean
-			--	clean = {}
-			--	definition = "definition"
-			--[[else]]if w.word == "+=" then
-				if not _Neil.Assert(not definition,"Syntax error in line #"..ins.linenumber) then return end
-				ins.define = clean
-				ins.define[#ins.define] = nil
-				clean = {}
-				definition = "add"
-			elseif w.word == "-=" then
-				if not _Neil.Assert(not definition,"Syntax error in line #"..ins.linenumber) then return end
-				ins.define = clean
-				ins.define[#ins.define] = nil
-				--ins.define = clean
-				clean = {}
-				definition = "subtract"
 			end
 		end
 		ins.words = clean
 		if #clean==0 or clean[1].kind=="comment" or (prefixed(clean[1].word,"//")) then
 			definition = "whiteline"
-		elseif clean[1].word=="#" then
+		elseif clean[1].word=="#" and clean[1].kind~="string" then
 			definition = "preprocessor directive"
 		else
 			definition = definition or "instruction"
@@ -1985,7 +1989,7 @@ function switches.oud.case(ins,scope)
 	for i=2,#ins.words do
 		local word = ins.words[i]
 		if word.kind=="comment" then break end
-		if word.kind~="string" and word.kind~="number" and (word.word~="true" or word.word~="false") then return nil,"Case requires complete constant value" end
+		if word.kind~="string" and word.kind~="number" and word.kind~="character chain" and (word.word~="true" or word.word~="false") then return nil,"Case requires complete constant value (got "..word.kind..")" end
 		if i~=2 then ret = ret .. " or " end
 		ret = ret .. "("..scope.casecheck.." == "
 		if word.kind=="string" then ret = ret .. '"' .. word.word .. '"' else ret = ret .. word.word end
@@ -2052,7 +2056,7 @@ function switches.nieuw.case(ins,scope)
 	for i=2,#ins.words do
 		local word = ins.words[i]
 		if word.kind=="comment" then break end
-		if word.kind~="string" and word.kind~="number" and (word.word~="true" or word.word~="false") then return nil,"Case requires complete constant value" end
+		if word.kind~="string" and word.kind~="number"  and word.kind~="character chain"  and (word.word~="true" or word.word~="false") then return nil,"Case requires complete constant value" end
 		if i~=2 then scope.replacer = scope.replacer .. " or " end
 		scope.replacer = scope.replacer .. "("..scope.casecheck.." == "
 		if word.kind=="string" then scope.replacer = scope.replacer .. '"' .. word.word .. '"' else scope.replacer = scope.replacer .. word.word end
@@ -2367,6 +2371,10 @@ local function Translate(chopped,chunk)
 		elseif ins.kind=="whiteline" then
 		   ret = ret .."-- whiteline received --"
         elseif ins["kind"] == "preprocessor directive" then
+			if #ins.words<2 then 
+				print(Serialize("???",ins))
+				return nil,"Invalid directive ("..chunk..":"..ins.linenumber..")" 
+			end
 			local dir = ins.words[2].lword -- word 1 is always # after all!
 			if dir~="use" then ret = ret .. "-- directive: #"..dir end
 			if dir=="macro" then
@@ -2962,6 +2970,7 @@ function _Neil.Load(script,chunk)
 	_Neil.Assert(script,"Translation error:\n"..err)
 	if not script then return end -- Safety precaution!
 	local ret,err = (loadstring or load)(script,chunk)
+	if not ret then print(script) end
 	_Neil.Assert(ret,err)
 	return ret
 end
@@ -3014,7 +3023,10 @@ function _Neil.UseFile(file,chunk)
 	if not tr then return nil,er end
 	local comp
 	comp,e = (loadstring or load)(tr,chunk or file)
-	if not comp then return nil,e end
+	if not comp then 
+		--print(tr)
+		return nil,e 
+	end
 	return comp() or true
 end
 
