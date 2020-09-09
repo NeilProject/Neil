@@ -57,7 +57,7 @@ local keywords = { "void","int","byte","number","bool","boolean","delegate","fun
 				   "true", "false", -- The two boolean values
 				   "nil", "null", -- "null" will be replaced by "nil"
 				   "init","defer","div","var","break","and","or","not",
-				   "import","export"
+				   "import","export","deftable","defmeta"
 
 }
 
@@ -121,9 +121,9 @@ do local kk
            _Neil.Assert(type(v)=="number","Number required"..kk)
            v = math.floor(v+.5)
            if v<0 then
-             return 255-(math.abs(v)%255)
+             return 255-(math.abs(v)%256)
            else
-             return v%255
+             return v%256
            end
          end,
        int = function(v)
@@ -678,8 +678,7 @@ local function ClassNew(class,actclass,...)
 	  for k,v in pairs(class.AbstractGetProperties) do error("Abstract get-property ("..k..") found in class!") end
 	  for k,v in pairs(class.AbstractSetProperties) do error("Abstract set-property ("..k..") found in class!") end
 	  for k,v in pairs(class.AbstractMethods)       do error("Abstract method ("..k..") found in class!") end
-	  local obj,trueobject
-	  -- print("FUCK",obj,trueobject)
+	  local obj,trueobject	  
 	  trueobject = {}
 	  for k,odata in pairs({class.Members, class.GetProperties, class.SetProperties, class.Methods }) do 
 	      -- trueobject[k] = {}
@@ -913,7 +912,7 @@ function Class.NewMember(privateclass,nameclass,membertype,membername,protection
 	if membertype=="int" then
 		nm.Value = math.floor(((tonumber(value) or 0)+.5))
 	elseif membertype=="byte" then
-		nm.Value = math.floor(((tonumber(value) or 0)+.5)) % 255
+		nm.Value = math.floor(((tonumber(value) or 0)+.5)) % 256
 	elseif membertype=="boolean" then
 		nm.Value=value~=nil and value~=false
 	elseif membertype=="string" then
@@ -1559,6 +1558,9 @@ local function GetIdentifier(id,unk,unknownprefix,ins)
 	local classed = ""
 	if not unk then
 		error("nil for unknowncheck \n\n "..debug.traceback())
+	end
+	if (not id) then
+		error("Total panic! id=nil!\n\n"..debug.traceback())
 	end
 	id = id:upper()
 	if _Neil.Globals.prefixed(id,"CLASS.") then error("Class recognition NOT yet supported!") end
@@ -2362,6 +2364,49 @@ local function Translate(chopped,chunk)
 		-- error("Parsing Quick Meta not yet fully up!")
 	end
 	--- </QUICK META>
+	
+	-- <DEFTABLE>
+	function DefTableParse(ins,scope)
+		if IsType(ins.words[1].lword) then
+			return "Function definitions in DefTable not yet possible"
+		end
+		for _,chk in ipairs(ins.words) do
+			if chk.kind=="comment" then
+				return "Comments not allowed in DefTable definitions. You can place them on loose lines, but not in actual definitions! Error"
+			end
+		end
+		if ins.words[1].word=="end" and ins.words[1].kind=="keyword" then
+			ret = ret .. "}"
+			if scope.type=="defmeta" then ret = ret .. ")" end
+			ret = ret .. " end"
+			EndScope()
+			return nil
+		end
+		if #ins.words == 1 then
+			if scope.type=="defmeta" then
+				return "Array defintion not possible for defmeta"
+			end
+			ret = ret .."\""..ins.words[1].word.."\","
+			return nil
+		end
+		if ins.words[2].word == "=" and ins.words[2].kind == "operator" then
+			if #ins.words<3 then return "More input expected!" end
+			local id = ins.words[1].word
+			if scope.type == "defmeta" then 
+				id = ins.words[1].lword
+				if not _Neil.Globals.Prefixed(id,"__") then id = "__"..id end
+			end
+			local script,err = LitTrans(alwaysplua, pluaprefix, ins,3,false,unknowns,unknownprefix)
+			if not script then return err end
+			ret = ret .. '["'..id..'"] = '..script
+			local tscope,tscopeid = CurrentScope ()
+			if tscope==scope then ret = ret .. "," end
+			return nil
+		else
+			return "DefTable syntax error!"
+		end
+	end
+	-- </DEFTABLE>
 
 	for insid,ins in ipairs(chopped.instructions) do
 		if cline ~= ins.linenumber then ret = ret .."\n--[["..(ins.linenumber or "<??>").."]]\t"; cline=ins.linenumber end
@@ -2495,6 +2540,10 @@ local function Translate(chopped,chunk)
 				end
 			end
 			ret = ret .. line			
+		elseif scope.type=="defmeta" or scope.type=="deftable" then
+			local e = DefTableParse(ins,scope)
+			if e then return nil,e.." in line #"..ins.linenumber.." ("..chunk..")" end
+			scope,scopeid = CurrentScope()			
         elseif scope.classscope then -- must after the preprocessor directives be first!!!
 			local e = ClassParse(insid,ins,scope)
 			if e then return nil,e.." in line #"..ins.linenumber.." ("..chunk..")" end
@@ -2787,9 +2836,10 @@ local function Translate(chopped,chunk)
 			    -- In all situations not noted above
 				ret = ret .."end"				
 			end
-			ret = ret .. " --[[endscope: "..scope.id.."; "..scope.type.." ]] "
+			ret = ret .. " --[[endscope: "..scope.id.."; "..scope.type.." ]] "			
 			_EndScope()
 			scope,scopeid = CurrentScope()
+			if scope.type=="defmeta" or scope.type=="deftable" then ret = ret .. "," end
 			-- print("End: ",#scopes,scope,scopeid,"Line: "..ins.linenumber)
         elseif ins.words[1].lword=="for" then
 			if (not allowground) and scope.type=="script" then return nil,ins.words[1].word.." statement not allowed in ground scope  ("..chunk..", line #"..ins.linenumber..")" end
@@ -2901,6 +2951,33 @@ local function Translate(chopped,chunk)
 		   if not result then return nil,error.." in line "..ins.linenumber.." ("..chunk..")" end
 		   ret = ret .. result
 		  --  error("Identifier from start processing not yet implemented")
+		elseif ins.words[1].lword=="deftable" or ins.words[1].lword=="defmeta" then
+			local ttype = ins.words[1].lword
+			local idn = 2
+			if #ins.words<1 then return nil,"'deftable/defmeta' expects more input in line "..ins.linenumber.." ("..chunk..")" end
+			if ins.words[2].kind=="keyword" then
+				if ins.words[2].lword~="plua" and ins.words[2].lword~="table" and ins.words[2].lword~="var" then
+					return nil,"Type of either TABLE or VAR or PLUA expected in line "..ins.linenumber.." ("..chunk..")" 
+				end
+				idn = 3
+				return nil,"no support yet for deftable and declare in once in line "..ins.linenumber.." ("..chunk..")" 
+			end
+			if #ins.words<idn then return nil,"'deftable/defmeta' expects more input in line "..ins.linenumber.." ("..chunk..")" end
+			if ins.words[idn].kind ~= "identifier" then
+				print(idn)
+				return nil,"Identifier expected in line "..ins.linenumber.." ("..chunk..")"
+			end
+			local id = ins.words[idn].word
+			local wid = GetIdentifier(id,unknowns,unknownprefix,ins)
+			ret = ret .. "do\t"..wid.." = "
+			if ttype=="defmeta" then
+				ret = ret .. "setmetatable({},{" 
+			else
+				ret = ret .. "{"
+			end
+			local script
+			script,scope,scopeid = NewScope("",ttype)
+			scope.wid = wid
 		else
 			-- print("<translation>\n","\r"..ret.."\n</translation>") -- debug
 			print(Serialize("Instruction_"..insid,ins))
