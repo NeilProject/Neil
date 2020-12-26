@@ -3145,7 +3145,7 @@ function _Neil.Translate(script,chunk)
 	if not ret then 
 		return nil,"Neil Translation error: "..error 
 	end
-	print("<translation>\n"..ret.."\n</translation>") -- debug only!!!
+	-- print("<translation>\n"..ret.."\n</translation>") -- debug only!!!
 	return ret,"Ok"
 end
 
