@@ -915,8 +915,8 @@ function Class.Create(name,private,extend)
 					ret.Class[k][iname]=data
 				end
 				for iname,data in pairs(base.Class["Abstract"..k] or {} ) do
-					ret.Base[k][iname]={tpe=k,dat=data,abstract=true}
-					ret.Class["Abstract"..k]=true
+					ret.Base[iname]={tpe=k,dat=data,abstract=true}
+					ret.Class["Abstract"..k][iname]=true
 				end
 				for iname,data in pairs(base.Class["Static"..k]) do
 					ret.Class.Final[iname]=true
@@ -984,20 +984,26 @@ function Class.NewMethod(privateclass,nameclass,membertype,membername,protection
 	assert(not cl.Sealed,"Class is already sealed and ready for usage")
 	local t,s = vcl[".hasmember"](membername)
 	-- override
+	local isabstract = value=="abstract"
 	if t then
+		if (isabstract) then error("Abstract cannot be used to override something") end
 		if (cl.Final[membername:upper()]) then error("Final element override ("..membername..")") end
 		if (cl.Base[membername:upper()]) then
 			if cl.Base[membername:upper()].tpe~="Methods" then error(membername.." cannot be overridden as a method!") end
 			cl.Base[membername:upper()] = nil
+			cl.Class.AbstractMethods[membername:upper()]=nil
 			t = false
 		end
 	end
 	-- checkout
 	membertype = membertype:lower()
 	if t then error("There is already a "..t:lower().." ("..s..") named '"..membername.."' present in that class") end
-	assert(type(value)=="function","Illegal method: "..type(value))
+	assert(isabstract or type(value)=="function","Illegal method: "..type(value))
 	local nm = {Type='Method', Constant=true, Value=value, ReturnType=membertype }
-	if static then
+	if isabstract then
+		if membername:lower()=="constructor" or membername:lower()=="desstructor" then error ("No support yet for abstract constructors and destructors") end
+		cl.Class.AbstractMethods[membername:upper()] = nm
+	elseif static then
 		if membername:lower()=="constructor" then
 			assert(not cl.StaticConstructor,"There already is a static constructor!")
 			cl.Class.StaticConstructor = nm
@@ -2278,6 +2284,7 @@ local function Translate(chopped,chunk)
 		local initvalue = "nil"
 		local istype
 		local isstatic = false
+		local isabstract = false
 		local property
 		-- local ret = ""
 		local realtype
@@ -2353,6 +2360,8 @@ local function Translate(chopped,chunk)
 			elseif w=="get" or w=="set" then
 				if property then return "Property syntax error" end
 				property = w
+			elseif w=="abstract" then
+				isabstract=true
 			elseif IsType(ins.words[i].word) then
 				-- all okay
 			else
@@ -2387,6 +2396,7 @@ local function Translate(chopped,chunk)
 		elseif property then
 			local func
 			local nscopescript,nscope,nid = NewScope("","property-"..property.."-function")
+			if isabstract then return "Abstract not yet supported for properties" end
 			if istype=="void" then return "Void type not valid for properties" end
 			if property=="get" then				
 				func = "function(self)"
@@ -2404,6 +2414,7 @@ local function Translate(chopped,chunk)
 		elseif i>=#ins.words or ins.words[i+1].kind=="comment" then
 			if istype=="void" then return "Void type only allowed for functions and methods" end
 			--                                             priv cname,  memtyp  memnam  prot   rw       static value
+			if isabstract then return "Invalud use of 'abstract'" end
 			ret = ret .. string.format("\t".._Neil.Neil..".Class.NewMember(%s,\"%s\", \"%s\", \"%s\", \"%s\", \"%s\", %s,    nil )",cl_private,scope.classname,istype,identifier,isglobal,rw,isstatic)
 			-- if isstatic and scope.class=="class" then scope.locals[membername] = _Neil.Neil..".Globals."..classname.."."..membername end
 			scope.identifiers[identifier:upper()] = "self."..identifier
@@ -2415,10 +2426,20 @@ local function Translate(chopped,chunk)
 			scope.identifiers[identifier:upper()] = "self."..identifier
 		elseif ins.words[i+1].word =="(" then
 			scope.identifiers[identifier:upper()] = "self."..identifier
-			local func,error = DefineFunction(ins,i+2,istype,false,false,true,alwaysplua,pluaprefix)
+			local func,error 
+			if isabstract then
+				if ifstatic then error "Abstract cannot be used on static methods" end
+				func = '"abstract"'
+			else
+				func,error = DefineFunction(ins,i+2,istype,false,false,true,alwaysplua,pluaprefix)
+			end
 			if not func then return error end
 			ret = ret .. string.format("\t".. _Neil.Neil..".Class.NewMethod(%s,\"%s\", \"%s\", \"%s\", \"%s\", \"%s\", %s,    %s ",cl_private,scope.classname,istype,identifier,isglobal,rw,isstatic,func)
-			scopes[#scopes].closure=")"
+			if isabstract then
+				ret = ret .. ")"
+			else
+				scopes[#scopes].closure=")"
+			end
 			-- error("Method parsing not yet supported")
 		end
 		-- error("Can't get on the move yet\n"..Serialize("class_ins["..insid.."]",ins).."\n\n"..ret)
