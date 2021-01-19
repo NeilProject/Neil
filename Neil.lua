@@ -1,8 +1,8 @@
 -- <License Block>
 -- Neil.lua
 -- Neil
--- version: 20.12.26
--- Copyright (C) 2020 Jeroen P. Broks
+-- version: 21.01.20
+-- Copyright (C) 2020, 2021 Jeroen P. Broks
 -- This software is provided 'as-is', without any express or implied
 -- warranty.  In no event will the authors be held liable for any damages
 -- arising from the use of this software.
@@ -2324,11 +2324,13 @@ local function Translate(chopped,chunk)
 				local f,e = DefineFunction(ins,i+2,istype,alwaysplua,pluaprefix,true)
 				ret = ret .. string.format("\t".. _Neil.Neil..".Class.NewMethod(%s,\"%s\", \"%s\", \"%s\", \"%s\", \"%s\", %s,    %s ",cl_private,scope.classname,istype,dtype,isglobal,rw,isstatic,f)
 				local s,sid = CurrentScope()
+				s.identifiers.SELF = "self"
 				s.closure=")"
 				s.returntype="void"
 			else
 				local script,s,sid = NewScope("function(self)",dtype.."-function")
 				ret = ret .. string.format("\t".. _Neil.Neil..".Class.NewMethod(%s,\"%s\", \"%s\", \"%s\", \"%s\", \"%s\", %s,    %s ",cl_private,scope.classname,istype,dtype,isglobal,rw,isstatic,script)
+				s.identifiers.SELF = "self"
 				s.closure=")"
 				s.returntype="void"
 			end
