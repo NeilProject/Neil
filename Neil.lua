@@ -233,6 +233,15 @@ Globals = {
 		end
 		return nil                                 
 	end, Constant=true },
+	["REMOVEFROMARRAY"] = { Type="delegate", Constant=true, value=function(tab,index)
+		assert(type(tab)=="table","First argument of RemoveFromArray must be a table and not a "..type(tab))
+		index = math.floor(index or 1)
+		assert(type(index)=="number","Second argument of RemoveFromArray must be a number and not a "..type(index))
+		local l = #table
+		for i=index,l do
+			tab[i]=tab[i+1]
+		end
+	end},
 	['LUA'] = { Type='table', Value=_G, Constant=true },
 	["TRANSLATION_TARGET"] = {Type="string", Value="Lua", Constant=true},
 	["CHR"] = { Type='delegate', Value=string.char, Constant=true },
@@ -3073,7 +3082,7 @@ local function Translate(chopped,chunk)
 			print("with "..scope.with.." <= "..dw)
 		elseif ins.words[1].word=="break" then
 			ret = ret .. "break\t"
-		elseif (ins.words[1].kind=="identifier" or ins.words[1].kind=="with-mark" or ins.words[1].kind=="operator") and ins.kind=="instruction" then
+		elseif ((ins.words[1].kind=="identifier" or ins.words[1].kind=="with-mark" or ins.words[1].kind=="operator") and ins.kind=="instruction" ) or ins.words[1].lword=="new" then
 		   if (not allowground) and scope.type=="script" then 
 				-- print(Serialize("Forbidden instruction",ins))
 				return nil,"Instruction not allowed in ground scope ("..chunk..", line #"..ins.linenumber..")" 
