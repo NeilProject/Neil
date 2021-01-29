@@ -2214,7 +2214,7 @@ local function decideswitchmethod()
 end
 
 local function switchhandler(ins,scope)
-	if ins.words[1].word=="case" then
+	if ins.words[1].lword=="case" then
 		return switches[switchmethod].case(ins,scope)
 	else
 		return switches[switchmethod].default(ins,scope)
@@ -3218,7 +3218,13 @@ function _Neil.Use(module,chunk)
 	elseif _Neil.DirExists(module..".neilbundle") then used,err = _Neil.UseDir(module..".neilbundle",chunk) 
 	else
 		for k,v in pairs(_Neil.UseFileTable) do
-			if _Neil.FileExists(module.."."..k) then used,err = _Neil.Assert(v(module.."."..k,ch)) end
+			if _Neil.FileExists(module.."."..k) then 
+				--print("Using as: "..k)
+				local script,lerr = _Neil.Assert(_Neil.ReadFile(module.."."..k))
+				local pused
+				pused,err = _Neil.Assert(v(script,ch)) 
+				used,err = _Neil.Assert(pused())
+			end
 		end
 		if not used then
 			for k,v in pairs(_Neil.UseDirTable) do
