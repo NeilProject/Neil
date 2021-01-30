@@ -197,7 +197,7 @@ end
 -- Globals
 local substr = string.sub
 local Globals
-Globals = {
+Globals = {	
 	['LUALOADSTRING'] = {Type='delegate', Constant=true, Value=loadstring or load},
 	['LUADOSTRING'] = {Type='delegate', Constant=true, Value=function(str,chunk,...) return _Neil.Globals.LuaLoadString(str,chunk)(...) end},
 	['NEILLOADSTRING'] = {Type='delegate', Constant=true, Value=function(str,chunk) return _Neil.Load(str,chunk) end},
@@ -410,6 +410,9 @@ Globals = {
 		if ret=="" then return "nothing" end
 		return ret
 	end},
+	["INVOKE"] = {Type='delegate', Constant=true, Value=function(func,...)
+		if func then return true,func(...) else return false end
+	end}
 }
 
 local function imodtoglob(name,asname)
