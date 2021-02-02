@@ -253,6 +253,7 @@ Globals = {
 		local g = Globals[n]
 		return g~=nil and g~=false
 	end},
+	['ROUND'] = {Type='delegate', Constant=true, value=function(a) return math.floor(a+.5) end},
 	['SOUT'] = {Type='delegate', Constant=true,Value=function(...) 
 			local ret = ""
 			for _,v in ipairs{...} do ret = ret .. Globals.TOSTRING.Value(v) end
