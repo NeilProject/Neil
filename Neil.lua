@@ -58,6 +58,7 @@ local keywords = { "void","int","byte","number","bool","boolean","delegate","fun
 				   "nil", "null", -- "null" will be replaced by "nil"
 				   "init","defer","div","var","break","and","or","not",
 				   "import","export","deftable","defmeta","link","infinity",
+				   "constructor","destructor",
 				   "try","catch","finally" -- "finally" is not yet supported, but I reserved the word as a keyword for later usage, as I hope to implement it in the future.
 }
 
