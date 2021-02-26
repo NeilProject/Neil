@@ -465,7 +465,7 @@ _Neil.Globals = setmetatable({},{
 		end,
 	  __call=function(s,newk,oftype,rw,defaultvalue)
 		  local uk = newk:upper()
-		  _Neil.Assert(not Globals[uk],"Duplicate global identifier "..newk)
+		  _Neil.Assert(not Globals[uk],"Duplicate global identifier: "..newk)
 		  local newdec = {}
 		  if oftype=="string" then
 			  defaultvalue = defaultvalue or ""
