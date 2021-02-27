@@ -1,7 +1,7 @@
 -- <License Block>
 -- Neil.lua
 -- Neil
--- version: 21.01.20
+-- version: 21.02.27
 -- Copyright (C) 2020, 2021 Jeroen P. Broks
 -- This software is provided 'as-is', without any express or implied
 -- warranty.  In no event will the authors be held liable for any damages
@@ -552,7 +552,7 @@ end
 local function SafeString(avalue)
 		local value = avalue
 		for i=1, 255 do
-			if i<32 or i>126 or i==34 then value = value:gsub(string.char(i),("\\03d"):format(i)) end
+			if i<32 or i>126 or i==34 then value = value:gsub(string.char(i),("\\%03d"):format(i)) end
 		end
 		return value
 end
