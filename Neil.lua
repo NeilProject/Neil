@@ -999,6 +999,11 @@ function Class.NewMethod(privateclass,nameclass,membertype,membername,protection
 	local t,s = vcl[".hasmember"](membername)
 	-- override
 	local isabstract = value=="abstract"
+	local isfinal 
+	if static=="final" then
+		isfinal=true
+		static=nil
+	end
 	if t then
 		if (isabstract) then error("Abstract cannot be used to override something") end
 		if (cl.Final[membername:upper()]) then error("Final element override ("..membername..")") end
@@ -1008,6 +1013,10 @@ function Class.NewMethod(privateclass,nameclass,membertype,membername,protection
 			cl.Class.AbstractMethods[membername:upper()]=nil
 			t = false
 		end
+	end
+	-- Set to final
+	if isfinal then
+		cl.Final[membername:upper()]=true
 	end
 	-- checkout
 	membertype = membertype:lower()
@@ -2299,6 +2308,7 @@ local function Translate(chopped,chunk)
 		local istype
 		local isstatic = false
 		local isabstract = false
+		local isfinal = false
 		local property
 		-- local ret = ""
 		local realtype
@@ -2378,6 +2388,10 @@ local function Translate(chopped,chunk)
 				property = w
 			elseif w=="abstract" then
 				isabstract=true
+				if isfinal then return "'abstract' keyword found when already final" end
+			elseif w=="final" then
+				isfinal=true
+				if isabstract then return "'final' keyword found when already abstract" end
 			elseif IsType(ins.words[i].word) then
 				-- all okay
 			else
@@ -2450,6 +2464,9 @@ local function Translate(chopped,chunk)
 				func,error = DefineFunction(ins,i+2,istype,false,false,true,alwaysplua,pluaprefix)
 			end
 			if not func then return error end
+			if isfinal then
+				isstatic = "final"
+			end
 			ret = ret .. string.format("\t".. _Neil.Neil..".Class.NewMethod(%s,\"%s\", \"%s\", \"%s\", \"%s\", \"%s\", %s,    %s ",cl_private,scope.classname,istype,identifier,isglobal,rw,isstatic,func)
 			if isabstract then
 				ret = ret .. ")"
@@ -2696,7 +2713,7 @@ local function Translate(chopped,chunk)
 			ret = ret .. r
 		elseif scope.type=="switch" then
 			return nil,"Illegal action in switch scope in line #"..ins.linenumber.." ("..chunk..")" 
-		elseif ins.words[1].lword=="switch" then
+		elseif ins.words[1].lword=="switch" and ins.words[1].kind=="keyword" then
 			switchmethod = switchmethod or decideswitchmethod()
 			local r,e = switches[switchmethod].start(ins,unknowns)
 			if not r then 
@@ -2862,7 +2879,7 @@ local function Translate(chopped,chunk)
 		elseif ins.words[1].lword=="else" then
 			if scope.type~="if" and scope.type~="elseif" then return nil,"'Else without 'If' in line "..ins.linenumber.." ("..chunk..")" end
 			if #ins.words>2 then
-			   if ins.words[2].kind~="comment" then return nil,"Else does not take any more input" end
+			   if ins.words[2].kind~="comment" then return nil,"Else does not take any more input in line "..ins.linenumber.." ("..chunk..")" end
 			end
 			_EndScope()
 			local locs = NewScope("","else")
@@ -3090,7 +3107,7 @@ local function Translate(chopped,chunk)
 		elseif ((ins.words[1].kind=="identifier" or ins.words[1].kind=="with-mark" or ins.words[1].kind=="operator") and ins.kind=="instruction" ) or ins.words[1].lword=="new" then
 		   if (not allowground) and scope.type=="script" then 
 				-- print(Serialize("Forbidden instruction",ins))
-				return nil,"Instruction not allowed in ground scope ("..chunk..", line #"..ins.linenumber..")" 
+				return nil,"Instruction not allowed in ground scope ("..tostring(chunk)..", line #"..ins.linenumber..")" 
 		   end
 		   local result,error = LitTrans(alwaysplua or localplua, pluaprefix,ins,1,nil,unknowns,ins)
 		   if not result then return nil,error.." in line "..ins.linenumber.." ("..chunk..")" end
@@ -3264,13 +3281,14 @@ end
 function _Neil.UseDir(dir,chunk)
 	local d = _Neil.ReadDir(dir)
 	local s = ""
+	--local s2 = ""
 	if _Neil.FileExists(dir.."/_neilbundle.neil") then return _Neil.UseFile(dir.."/_neilbundle.neil") end
 	for _,f in ipairs(d) do
 		if _Neil.Globals.Right(f,5):lower()==".neil" then
 			s = s .. "#use \"".._Neil.Globals.Left(f,#f-5).."\"\n"
 		end
 	end
-	print("#usebundle","\n"..s,"</>")
+	--print("#usebundle","\n"..s,"</>")
 	local comp,err = _Neil.Load(s,"NEILBUNDLE: "..dir)
 	if not comp then return nil,e end
 	return comp() or true
