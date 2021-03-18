@@ -1,7 +1,7 @@
 -- <License Block>
 -- Neil.lua
 -- Neil
--- version: 21.02.27
+-- version: 21.03.18
 -- Copyright (C) 2020, 2021 Jeroen P. Broks
 -- This software is provided 'as-is', without any express or implied
 -- warranty.  In no event will the authors be held liable for any damages
@@ -448,10 +448,11 @@ _Neil.Globals = setmetatable({},{
 	 __newindex = function(s,k,v)
 		  local uk = k:upper()
 		  local want = Globals[uk]
+		  if Globals[uk].Value==v then return end -- Prevent some "readonly" issues with += and -=! If the value (which can also be a pointer) reamins the same no complaints!
 		  _Neil.Assert(want,"Defining unknown global identifier \""..k.."\"!")          
 		  if want.Constant and v == want.Value then return end -- This prevents some static conflicts
 		  _Neil.Assert(not want.Constant,k.." is a constant and cannot be overwritten")
-		  _Neil.Assert((not want.ReadOnly) or (ReadOnlyWrite.Globals),k.." is read-only and cannot be overwritten")
+		  _Neil.Assert((not want.ReadOnly) or (ReadOnlyWrite.Globals),k.." is read-only and cannot be overwritten")		  
 		  Globals[uk].Value = ConvType(v,Globals[uk].Type,k)
 		  --print("Defined global ",uk," with ",v," became ",ConvType(v,Globals[uk].Type,k))
 		  if want.UndefinedConstant then
@@ -505,6 +506,7 @@ end
 local function Local_NewIndex(table,key,value)
 	  local uk = key:upper()
 	  local want = table[uk]	  
+	  if table[uk].Value==value then return end -- Prevent some "readonly" issues with += and -=! If the value (which can also be a pointer) reamins the same no complaints!
 	  _Neil.Assert(want,"Defining unknown local identifier \""..key.."\"!")          
 	  _Neil.Assert(not want.Constant,key.." is a constant and cannot be overwritten")
 	  _Neil.Assert((not want.ReadOnly) or (ReadOnlyWrite.Globals),key.." is read-only and cannot be overwritten")
@@ -797,9 +799,11 @@ local function ClassStaticNewIndex(class,actclass,k,v)
 		if class.Members[uk] or class.SetProperties[uk] or class.Methods[uk] then error("Member "..k.." is not static") end
 		if class.StaticMembers[uk] then
 			local m = class.StaticMembers[uk]
-			if m.Constant then error("Cannot write to constant member: "..k) end
-			if m.ReadOnly and (not class.AllowReadOnly) then error("Cannot write to read-only member: "..k) end
-			m.Value = ConvType(v,m.Type,"Class member "..k)
+			if m.Value~=v then -- Prevent some "readonly" issues with += and -=! If the value (which can also be a pointer) reamins the same no complaints!
+				if m.Constant then error("Cannot write to constant member: "..k) end
+				if m.ReadOnly and (not class.AllowReadOnly) then error("Cannot write to read-only member: "..k) end
+				m.Value = ConvType(v,m.Type,"Class member "..k)
+			end
 			return
 		end
 		if class.StaticMethods[uk] then error("Cannot overwrite static methods") end
@@ -862,10 +866,12 @@ function ClassNewIndex(trueobject,self,key,value)
 	   return
 	end
   if trueobject.class.Members[uk] then 
-	 if trueobject.class.Members[uk].Constant then error("Constants cannot be overwritten") end -- should be impossible, as constants are ALWAYS static, but when some clever whizkids break in, this measure is at least taken!
-	 if trueobject.class.Members[uk].ReadOnly and (not trueobject.AllowReadOnly) then error("You cannot overwrite read-only values") end
-	 -- for k,v in pairs(trueobject) do print("uk = "..uk,"key = "..k,type(v),value) end
-	 trueobject[uk].Value = value
+	 if trueobject[uk].Value~=value then -- Prevent some "readonly" issues with += and -=! If the value (which can also be a pointer) reamins the same no complaints!
+		if trueobject.class.Members[uk].Constant then error("Constants cannot be overwritten") end -- should be impossible, as constants are ALWAYS static, but when some clever whizkids break in, this measure is at least taken!
+		if trueobject.class.Members[uk].ReadOnly and (not trueobject.AllowReadOnly) then error("You cannot overwrite read-only values") end
+		-- for k,v in pairs(trueobject) do print("uk = "..uk,"key = "..k,type(v),value) end
+		trueobject[uk].Value = value
+	 end
 	 return
   end
   if trueobject.class.Methods[uk] then error("Methods cannot be overwritten") end
