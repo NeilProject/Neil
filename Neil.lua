@@ -1213,6 +1213,12 @@ local function Macro(script,chunk)
 				if i>=4 then work[chop[2]] = work[chop[2]] .. " " end
 				if i>=3 then work[chop[2]] = work[chop[2]] .. w end
 			end
+		elseif prefixed(line:lower(),"#gch") then -- global constant header -- Temporary solution
+			local chop = _Neil.Globals.Split(line," ")
+			if #chop~=2 then
+				return nil,"Invalid gch"
+			end
+			ret = rep(ret,"#gch "..chop[2],"const var "..chop[2].." = Lua.Neil.Globals."..chop[2])
 		elseif prefixed(line:lower(),"#use") then
 			if not prefixed(line:lower(),"#use \"") then return nil,"#use Syntax error: "..line end
 			local i = 7
@@ -2655,7 +2661,7 @@ local function Translate(chopped,chunk)
 				for i=1,#use_as do
 					local ch = Globals.MID.Value(u_use_as,i,1)
 					local bt = ch:byte()					
-					if bt>=48 and bt<=57 then return nil,"#use creates an identifier starting with a number ("..use_as..") in line #"..ins.linenumber.." ("..chunk..")" end
+					if i==1 and bt>=48 and bt<=57 then return nil,"#use creates an identifier starting with a number ("..use_as..") in line #"..ins.linenumber.." ("..chunk..")" end
 					allowed = allowed and ((bt>=48 and bt<=57) or (bt>=65 and bt<=90) or ch=="_")
 					--print(allowed,bt,ch)
 				end
