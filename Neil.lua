@@ -765,6 +765,13 @@ local function ClassStaticIndex(class,actclass,k)
 			if class.AbstractMethods[m] then return "Method","Abstract" end
 			return nil,nil
 		end
+	elseif k==".invoke" then
+		return function(m,...)
+			if class.StaticMethods[m] then 
+				return true,class.StaticMethods[uk].TrueMethod(...)
+			end
+			return false
+		end
 	elseif Globals.PREFIXED.Value(k,".") then
 		error("Command field unknown: "..k)
 	else
@@ -831,6 +838,14 @@ function ClassIndex(trueobject,self,k)
 		return fstatic(key)
 	end
 	return check
+  elseif k:lower()==".invoke" then
+	return function(fun,...)
+		if trueobject.class.Methods[uk] then 
+			return true,trueobject.class.Methods[uk].Value(self,...)
+		else
+			return false
+		end
+	end
   elseif k:lower()==".fromclass" then
 		return trueobject.class
   elseif Globals.PREFIXED.Value(k,".") then
