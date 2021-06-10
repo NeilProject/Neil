@@ -837,6 +837,7 @@ function ClassIndex(trueobject,self,k)
 		local fstatic = ClassStaticIndex(trueobject.class,trueobject.actclass,".hasmember")
 		return fstatic(key)
 	end
+	-- print(type(check).." returned!") -- DEBUG!!!
 	return check
   elseif k:lower()==".invoke" then
 	return function(fun,...)
@@ -1222,7 +1223,7 @@ local function Macro(script,chunk)
 			--for k,v in pairs(work) do -- This seems an odd way, but as case insensitive macros may be plannend for the future, I need to make sure nothing can happen here!
 			--	if k:upper()==chop[2]:upper() then return nil,"Duplicate macro '"..chop2[2].."'" end
 			--end
-			if work[chop[2]] then return nil,"Duplicate macro '"..chop2[2].."'" end
+			if work[chop[2]] then return nil,"Duplicate macro '"..chop[2].."'" end
 			work[chop[2]] = ""
 			for i,w in ipairs(chop) do
 				if i>=4 then work[chop[2]] = work[chop[2]] .. " " end
