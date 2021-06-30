@@ -1,7 +1,7 @@
 -- <License Block>
 -- Neil.lua
 -- Neil
--- version: 21.03.18
+-- version: 21.06.30
 -- Copyright (C) 2020, 2021 Jeroen P. Broks
 -- This software is provided 'as-is', without any express or implied
 -- warranty.  In no event will the authors be held liable for any damages
@@ -2637,9 +2637,12 @@ local function Translate(chopped,chunk)
 				else
 					nocath = ins.words[2].uword~="OFF" and ins.words[2].uword~="FALSE"
 				end
-			elseif dir=="mkl_lic" or dir=="mkl_version" then
+			elseif dir=="mkl_lic" or dir=="mkl_version" or dir=="pragma"  then
 			   -- These are only for my own usage, and engines will pick those up (if they are configured to do so)
 			   -- For Neil itself, these tags have no value at all and should be ignored!
+			   --
+			   -- Pragma is meant to be ignored by Neil itself, but which engines could use to some things with a Neil-script outside the scope of Neil (or even the Lua engine for that matter).
+			   -- The reason I set it here, is of course to make sure it's ignored by Neil itself and no errors are being thrown during the translation.
 			elseif dir=="region" then
 				   regions = regions + 1
 			elseif dir=="endregion" then
