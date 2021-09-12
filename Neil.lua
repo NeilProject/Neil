@@ -892,7 +892,7 @@ function ClassNewIndex(trueobject,self,key,value)
   end
   if trueobject.class.Methods[uk] then error("Methods cannot be overwritten") end
   if trueobject.class.SetProperties[uk] then return trueobject.class.SetProperties[uk].Value(self,value) end
-  if trueobject.class.GetProperties[uk] then error("Property "..k.." appears to be read-only") end
+  if trueobject.class.GetProperties[uk] then error("Property "..uk.." appears to be read-only") end
   error("No member named '"..key.."' present") -- Should never happen, but just in case!
 end
 
