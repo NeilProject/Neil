@@ -22,6 +22,10 @@
 local showtranslation = false -- When set to true, the translator will show the translation it generated... Only to be used when debugging Neil itself
 local usedebug = false
 
+-- Need debug chat?
+--local function dbgprint(...) print(...) end
+local function dbgprint() end
+
 
 -- Creation of library
 local _Neil = {}
@@ -204,6 +208,7 @@ Globals = {
 	['NEILLOADSTRING'] = {Type='delegate', Constant=true, Value=function(str,chunk) return _Neil.Load(str,chunk) end},
 	['NEILDOSTRING'] = {Type='delegate', Constant=true, Value=function(str,chunk,...) return _Neil.Load(str,chunk)(...) end},
 	['NEILUSE'] = {Type='delegate', Constant=true, Value=function(uf,chunk) return _Neil.Use(uf,chunk) end},
+	['NEILSOMETHING'] = {Type='delegate', Constant=true, Value=function(v) return v~=false and v~=nil end},
 	['SETMETATABLE'] = {Type='delegate', Constant=true, Value=setmetatable},
 	['TABLECONTAINS'] = {Type='delegate', Constant=true, Value=function(tab,want) 
 		for i,v in ipairs(tab) do 
@@ -1262,7 +1267,7 @@ end
 
 -- Chop code up
 local function Chop(script,chunk)
-	local allowtalk = true -- debug!
+	local allowtalk = false -- debug!
 	local talk = function(...) 
 		for i,l in ipairs {...} do
 			print(("talk%04d:>"):format(i),type(l),l)
@@ -3034,6 +3039,9 @@ local function Translate(chopped,chunk)
 		elseif ins.words[1].lword=="do" and ins.words[1].kind=="keyword" then
 			script,scope,scopeid = NewScope("","do")
 			ret = ret .. "do".." "..script
+		elseif ins.words[1].lword=="break" then
+			if scope.type=="script" then return nil,ins.words[1].word.." statement not allowed in ground scope  ("..chunk..", line #"..ins.linenumber..")" end
+			ret = ret .. " break "
 		elseif ins.words[1].lword=="for" then
 			if (not allowground) and scope.type=="script" then return nil,ins.words[1].word.." statement not allowed in ground scope  ("..chunk..", line #"..ins.linenumber..")" end
 			local its = {}
