@@ -21,8 +21,9 @@
 -- Debug settings
 local showtranslation = false -- When set to true, the translator will show the translation it generated... Only to be used when debugging Neil itself
 local usedebug = false
+local nodestructor = true -- When set destructors will be ignored. I found out that destructors have a bit of conflicts. I need to see how to do this better.
 
-local destructorwarn = false -- When set to 'true' it warns for called destructors. For some reason they can sometimes crash the system due to the memory wipe sometimes taking place BEFORE the destructor has been called.
+local destructorwarn = true -- When set to 'true' it warns for called destructors. For some reason they can sometimes crash the system due to the memory wipe sometimes taking place BEFORE the destructor has been called.
 local destructorwarnings = 0
 
 -- Need debug chat?
@@ -733,8 +734,8 @@ local function ClassNew(class,actclass,...)
 	  trueobject.destructor = class.Destructor
 	  trueobject.class=class
 	  trueobject.actclass=actclass
-	  local name=class.Name
-	  obj = setmetatable({},{
+	  local name=trueobject.Name
+	  local clmeta = {
 		  __index = function(s,k) return ClassIndex(trueobject,obj,k) end,
 		  __newindex = function(s,k,v) return ClassNewIndex(trueobject,obj,k,v) end,
 		  __call = function(s,...) if class.Methods.ONCALL then return class.Methods.ONCALL.Value(obj,...) else error("Class has no \"OnCall\" method") end end,
@@ -742,7 +743,20 @@ local function ClassNew(class,actclass,...)
 		  __pairs = function(s) if class.Methods.__PAIRS then return class.Methods.__PAIRS.Value(obj)() else error("Class has no \"__Pairs\" method") end end,
 		  __ipairs = function(s) if class.Methods.__IPAIRS then return class.Methods.__IPAIRS.Value(obj)() else error("Class has no \"__IPairs\" method") end end,
 		  __gc = function(s,...) if trueobject.destructor then if destructorwarn then destructorwarnings=destructorwarnings+1 print("\007WARNING! Destructor call!",destructorwarnings,name) end trueobject.destructor.Value(s) end end		  
-	  })
+	  }
+	  if nodestructor
+	  	if trueobject.destructor then
+	  		clmeta.__gc = function(s)
+	  			if destructorwarn then
+	  				destructorwarnings=destructorwarnings+1
+	  				print("\007WARNING! Destructor call! Please note that destructors are now ignored!",destructorwarnings,name)
+	  			end	  			
+	  		end
+	  	else
+	  		clmeta.__gc = nil
+	  	end
+	  end
+	  obj = setmetatable({},clmeta)
 	  if trueobject.class.Constructor then
 		 trueobject.AllowReadOnly = true
 		 trueobject.class.Constructor.Value(obj,...)
