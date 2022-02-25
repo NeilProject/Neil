@@ -22,6 +22,9 @@
 local showtranslation = false -- When set to true, the translator will show the translation it generated... Only to be used when debugging Neil itself
 local usedebug = false
 
+local destructorwarn = false -- When set to 'true' it warns for called destructors. For some reason they can sometimes crash the system due to the memory wipe sometimes taking place BEFORE the destructor has been called.
+local destructorwarnings = 0
+
 -- Need debug chat?
 --local function dbgprint(...) print(...) end
 local function dbgprint() end
@@ -730,6 +733,7 @@ local function ClassNew(class,actclass,...)
 	  trueobject.destructor = class.Destructor
 	  trueobject.class=class
 	  trueobject.actclass=actclass
+	  local name=class.Name
 	  obj = setmetatable({},{
 		  __index = function(s,k) return ClassIndex(trueobject,obj,k) end,
 		  __newindex = function(s,k,v) return ClassNewIndex(trueobject,obj,k,v) end,
@@ -737,8 +741,7 @@ local function ClassNew(class,actclass,...)
 		  __len = function(s,...) if class.Methods.__LENGTH then return class.Methods.__LENGTH.Value(obj,...) else error("Class has no \"__Length\" method") end end,
 		  __pairs = function(s) if class.Methods.__PAIRS then return class.Methods.__PAIRS.Value(obj)() else error("Class has no \"__Pairs\" method") end end,
 		  __ipairs = function(s) if class.Methods.__IPAIRS then return class.Methods.__IPAIRS.Value(obj)() else error("Class has no \"__IPairs\" method") end end,
-		  __gc = function(s,...) if trueobject.destructor then trueobject.destructor.Value(obj) end end
-		  
+		  __gc = function(s,...) if trueobject.destructor then if destructorwarn then destructorwarnings=destructorwarnings+1 print("\007WARNING! Destructor call!",destructorwarnings,name) end trueobject.destructor.Value(s) end end		  
 	  })
 	  if trueobject.class.Constructor then
 		 trueobject.AllowReadOnly = true
@@ -917,6 +920,7 @@ _Neil.Class = setmetatable({},{
 local GroupClasses = {}
 function Class.Create(name,private,extend)	
 	local ret = {}
+	ret.Name = name
 	ret.Class = { Members={}, Methods={}, GetProperties={},SetProperties={}, AbstractMethods={}, AbstractGetProperties={}, AbstractSetProperties={}, StaticMembers={}, StaticMethods={},StaticGetProperties={},StaticSetProperties={},Final={},Base={}, Extends=extend }
 	ret.Base = ret.Class.Base
 	ret.Final = ret.Class.Final
