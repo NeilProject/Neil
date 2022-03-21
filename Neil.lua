@@ -23,7 +23,7 @@ local showtranslation = false -- When set to true, the translator will show the 
 local usedebug = false
 local nodestructor = true -- When set destructors will be ignored. I found out that destructors have a bit of conflicts. I need to see how to do this better.
 
-local destructorwarn = true -- When set to 'true' it warns for called destructors. For some reason they can sometimes crash the system due to the memory wipe sometimes taking place BEFORE the destructor has been called.
+local destructorwarn = false -- When set to 'true' it warns for called destructors. For some reason they can sometimes crash the system due to the memory wipe sometimes taking place BEFORE the destructor has been called.
 local destructorwarnings = 0
 
 -- Need debug chat?
@@ -744,7 +744,7 @@ local function ClassNew(class,actclass,...)
 		  __ipairs = function(s) if class.Methods.__IPAIRS then return class.Methods.__IPAIRS.Value(obj)() else error("Class has no \"__IPairs\" method") end end,
 		  __gc = function(s,...) if trueobject.destructor then if destructorwarn then destructorwarnings=destructorwarnings+1 print("\007WARNING! Destructor call!",destructorwarnings,name) end trueobject.destructor.Value(s) end end		  
 	  }
-	  if nodestructor
+	  if nodestructor then
 	  	if trueobject.destructor then
 	  		clmeta.__gc = function(s)
 	  			if destructorwarn then
