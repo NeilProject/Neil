@@ -385,6 +385,17 @@ Globals = {
 			return tab[i]
 		end
 	end},
+	["INV_EACH"] = {Type='delegate', Constant=true, Value=function(tab)
+		assert(type(tab)=="table","INV_EACH expects a table. Got "..type(tab))
+		if tab[".neilclass"] then return tab.__INVEACH() end
+		local i = #tab + 1
+		return function()
+			i = i - 1
+			if i<=0 then return nil end
+			return tab[i]
+		end
+	end},
+
 	["TYPE"] = {Type='delegate', Constant=true, Value=function(v)
 		-- stuff for classes and things, come later!
 		return type(v)
