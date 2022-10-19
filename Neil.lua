@@ -41,7 +41,7 @@ _Neil.FileSystemCaseSensitive = false -- Must be set to true if directly reading
 local TranslationCount = 0
 
 -- For Global Defines
-local GlobalDefines = { ["SYS_LUA"] = true }
+local GlobalDefines = { ["SYS_LUA"] = true,["__NEIL"]=true }
 
 -- forwards
 local DefineFunction
@@ -2315,6 +2315,7 @@ local function Translate(chopped,chunk)
 	local LocalDefines = {}
 	local onmute,onif,allowelse = false,false,true
 	local prefixed = Globals.PREFIXED.Value
+	GlobalDefines.__NEIL=true
 	
 	
 
@@ -3286,6 +3287,7 @@ end
 function _Neil.Use(module,chunk)
 	local key,err
 	local used
+	GlobalDefines.__NEIL=true
 	if usedebug then print("#use","using",module,chunk) end
 	-- chunk = chunk or module
 	if _Neil.FileSystemCaseSensitive then
@@ -3330,7 +3332,8 @@ end
 
 
 -- Warning! Best is to NEVER call this function directly unless you know what you are doing!
-function _Neil.UseFile(file,chunk)	
+function _Neil.UseFile(file,chunk)
+	GlobalDefines.__NEIL=true
 	local s,e = _Neil.ReadFile(file)
 	if not s then return nil,e end
 	local tr,er = _Neil.Translate(s,chunk or file)
